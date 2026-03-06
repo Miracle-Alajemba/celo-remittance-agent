@@ -1,6 +1,12 @@
 /**
  * Agent Orchestrator
  * The core brain that processes user messages and orchestrates all modules
+ *
+ * Integrates:
+ * - ERC-8004: Agent wallet standard
+ * - x402: Payment protocol (Thirdweb)
+ * - Celo Skills: Modular capabilities framework
+ * - AgentScan: On-chain activity monitoring
  */
 
 import { parseRemittanceIntent, RemittanceIntent } from './intent-parser';
@@ -12,6 +18,10 @@ import { recordTransaction, getTransactionHistory, formatTransactionHistory, get
 import { enhanceIntentWithLLM } from './llm-service';
 import { getOrCreateUser, checkSpendingLimit, recordSpending, getSpendingSummary } from './user-profile';
 import { executeBlockchainTransfer } from '../transaction-executor';
+import { getAgentWallet, ERC8004Wallet } from './erc8004-wallet';
+import { getX402Protocol, X402PaymentProtocol } from './x402-payment';
+import { getSkillsFramework, CeloSkillsFramework } from './celo-skills';
+import { getAgentScanner, AgentScanner } from './agentscan';
 
 export interface AgentResponse {
   message: string;
@@ -105,6 +115,10 @@ export class AgentOrchestrator {
   private memory: ConversationMemory;
   private userId: string;
   private walletAddress: string;
+  private agentWallet: ERC8004Wallet;
+  private x402Protocol: X402PaymentProtocol;
+  private skillsFramework: CeloSkillsFramework;
+  private agentScanner: AgentScanner;
   private pendingConfirmation: {
     intent: RemittanceIntent;
     route: TransferRoute;
@@ -115,6 +129,19 @@ export class AgentOrchestrator {
     this.memory = new ConversationMemory();
     this.userId = userId;
     this.walletAddress = walletAddress;
+
+    // Initialize ERC-8004 wallet
+    this.agentWallet = getAgentWallet();
+
+    // Initialize x402 payment protocol
+    this.x402Protocol = getX402Protocol();
+
+    // Initialize Celo Skills framework
+    this.skillsFramework = getSkillsFramework();
+
+    // Initialize AgentScan
+    this.agentScanner = getAgentScanner();
+
     // Initialize user profile
     getOrCreateUser(userId, walletAddress);
   }
@@ -125,7 +152,7 @@ export class AgentOrchestrator {
 
     // Check for confirmation of pending transfer
     if (this.pendingConfirmation) {
-      return this.handleConfirmation(userMessage);
+      return await this.handleConfirmation(userMessage);
     }
 
     // Parse intent (keyword-based as fallback)
@@ -157,7 +184,7 @@ export class AgentOrchestrator {
     // Route to appropriate handler
     switch (intent.action) {
       case 'send':
-        return this.handleSendIntent(intent);
+        return await this.handleSendIntent(intent);
       case 'check_balance':
         return this.handleBalanceCheck(lang);
       case 'history':
@@ -165,7 +192,7 @@ export class AgentOrchestrator {
       case 'compare_fees':
         return this.handleFeeComparison(intent);
       case 'schedule':
-        return this.handleSchedule(intent);
+        return await this.handleSchedule(intent);
       case 'cancel':
         return this.handleCancel(lang);
       case 'help':
@@ -278,7 +305,7 @@ export class AgentOrchestrator {
     return response;
   }
 
-  private handleConfirmation(message: string): AgentResponse {
+  private async handleConfirmation(message: string): Promise<AgentResponse> {
     const lower = message.toLowerCase();
     const pending = this.pendingConfirmation!;
     const lang = pending.intent.detectedLanguage;
@@ -473,7 +500,7 @@ export class AgentOrchestrator {
     return response;
   }
 
-  private handleSchedule(intent: RemittanceIntent): AgentResponse {
+  private async handleSchedule(intent: RemittanceIntent): Promise<AgentResponse> {
     const lang = intent.detectedLanguage;
     const responses = RESPONSES[lang] || RESPONSES['en'];
 
@@ -500,7 +527,7 @@ export class AgentOrchestrator {
     }
 
     // Otherwise, treat as a send intent (the preview will handle scheduling)
-    return this.handleSendIntent(intent);
+    return await this.handleSendIntent(intent);
   }
 
   private handleCancel(lang: string): AgentResponse {
