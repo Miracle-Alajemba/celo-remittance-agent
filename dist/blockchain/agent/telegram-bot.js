@@ -73,10 +73,10 @@ class TelegramBotHandler {
             };
             this.users.set(user.id, user);
             this.agents.set(user.id, new orchestrator_1.AgentOrchestrator(`telegram_${user.id}`, '0x0000000000000000000000000000000000000000'));
-            await ctx.reply(`
+            const msgText = `
 👋 Welcome ${user.firstName}!
 
-I'm **CeloRemit**, your AI-powered remittance agent.
+I'm *CeloRemit*, your AI-powered remittance agent.
 
 I can help you:
 💸 Send money globally using Celo stablecoins
@@ -85,7 +85,7 @@ I can help you:
 💰 Check balances & transaction history
 🔄 Swap currencies
 
-**Try saying:**
+*Try saying:*
 • "Send $50 to Philippines"
 • "Transfer 100 euros to Nigeria monthly"
 • "Compare fees $200 to Kenya"
@@ -93,14 +93,18 @@ I can help you:
 • "Show history"
 
 Type /help for more commands!
-      `, {
-                parse_mode: 'Markdown',
-            });
+      `;
+            try {
+                await ctx.reply(msgText, { parse_mode: 'Markdown' });
+            }
+            catch (e) {
+                await ctx.reply(msgText);
+            }
         });
         // /help command
         this.bot.command('help', async (ctx) => {
-            await ctx.reply(`
-**Available Commands:**
+            const helpText = `
+*Available Commands:*
 
 /start - Start the bot
 /help - Show this help message
@@ -110,17 +114,21 @@ Type /help for more commands!
 /settings - Configure preferences
 /status - Check agent status
 
-**Chat with me naturally:**
+*Chat with me naturally:*
 • "Send $100 to my brother in Kenya"
 • "What's the exchange rate to Brazil?"
 • "Schedule monthly $50 transfers"
 • "How much did I send last month?"
 
-**Need support?**
+*Need support?*
 File an issue: https://github.com/Miracle-Alajemba/celo-remittance-agent/issues
-      `, {
-                parse_mode: 'Markdown',
-            });
+      `;
+            try {
+                await ctx.reply(helpText, { parse_mode: 'Markdown' });
+            }
+            catch (e) {
+                await ctx.reply(helpText);
+            }
         });
         // /balance command
         this.bot.command('balance', async (ctx) => {
@@ -129,7 +137,13 @@ File an issue: https://github.com/Miracle-Alajemba/celo-remittance-agent/issues
                 return await ctx.reply('❌ Session not found. Use /start first.');
             }
             const response = await agent.processMessage('Check my balance');
-            await ctx.reply(response.message, { parse_mode: 'Markdown' });
+            const text = response.message.replace(/\*\*(.*?)\*\*/g, '*$1*');
+            try {
+                await ctx.reply(text, { parse_mode: 'Markdown' });
+            }
+            catch (e) {
+                await ctx.reply(text);
+            }
         });
         // /history command
         this.bot.command('history', async (ctx) => {
@@ -138,9 +152,13 @@ File an issue: https://github.com/Miracle-Alajemba/celo-remittance-agent/issues
                 return await ctx.reply('❌ Session not found. Use /start first.');
             }
             const response = await agent.processMessage('Show my transaction history');
-            await ctx.reply(response.message, {
-                parse_mode: 'Markdown',
-            });
+            const text = response.message.replace(/\*\*(.*?)\*\*/g, '*$1*');
+            try {
+                await ctx.reply(text, { parse_mode: 'Markdown' });
+            }
+            catch (e) {
+                await ctx.reply(text);
+            }
         });
         // /status command
         this.bot.command('status', async (ctx) => {
@@ -148,8 +166,8 @@ File an issue: https://github.com/Miracle-Alajemba/celo-remittance-agent/issues
             if (!agent) {
                 return await ctx.reply('❌ Session not found. Use /start first.');
             }
-            await ctx.reply(`
-🤖 **Agent Status**
+            const statusText = `
+🤖 *Agent Status*
 
 ✅ Online and ready
 ⚡ Wallet: Connected
@@ -160,9 +178,13 @@ Type your remittance request or try:
 • "Send $50 to Kenya"
 • "Compare fees to Nigeria"
 • "Help"
-      `, {
-                parse_mode: 'Markdown',
-            });
+      `;
+            try {
+                await ctx.reply(statusText, { parse_mode: 'Markdown' });
+            }
+            catch (e) {
+                await ctx.reply(statusText);
+            }
         });
         // Handle regular text messages
         this.bot.on('text', async (ctx) => {
@@ -192,14 +214,21 @@ Type your remittance request or try:
                 let replyText = response.message;
                 // Add action suggestions as buttons/text
                 if (response.suggestedActions && response.suggestedActions.length > 0) {
-                    replyText += '\n\n**Quick actions:**\n';
+                    replyText += '\n\n*Quick actions:*\n';
                     response.suggestedActions.forEach((action, i) => {
                         replyText += `${i + 1}. ${action}\n`;
                     });
                 }
-                await ctx.reply(replyText, {
-                    parse_mode: 'Markdown',
-                });
+                replyText = replyText.replace(/\*\*(.*?)\*\*/g, '*$1*');
+                try {
+                    await ctx.reply(replyText, {
+                        parse_mode: 'Markdown',
+                    });
+                }
+                catch (e) {
+                    console.warn("[Telegram] Markdown parsing failed, sending raw content");
+                    await ctx.reply(replyText);
+                }
                 // Log to console
                 console.log(`[Telegram] ${ctx.from.first_name}: ${userMessage}`);
             }
@@ -284,13 +313,19 @@ Type your remittance request or try:
     async sendMessageToUser(userId, message) {
         if (!this.bot)
             return;
+        const text = message.replace(/\*\*(.*?)\*\*/g, '*$1*');
         try {
-            await this.bot.telegram.sendMessage(userId, message, {
+            await this.bot.telegram.sendMessage(userId, text, {
                 parse_mode: 'Markdown',
             });
         }
-        catch (error) {
-            console.error(`[Telegram] Failed to send message to ${userId}:`, error);
+        catch (e) {
+            try {
+                await this.bot.telegram.sendMessage(userId, text);
+            }
+            catch (error) {
+                console.error(`[Telegram] Failed to send message to ${userId}:`, error);
+            }
         }
     }
     /**

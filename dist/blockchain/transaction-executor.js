@@ -98,18 +98,16 @@ async function executeBlockchainTransfer(request) {
                 status: 'failed',
             };
         }
-        // Check allowance and approve if needed
-        const allowance = await contract.allowance(walletAddress, request.recipient);
-        if (allowance < amountToSend) {
-            const approveTx = await contract.approve(request.recipient, amountToSend);
-            await approveTx.wait();
-        }
         // Execute transfer
         const tx = await contract.transfer(request.recipient, amountToSend);
         // Wait for transaction confirmation (with timeout)
+        let timeoutId;
+        const timeoutPromise = new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Transaction confirmation timeout')), 60000);
+        });
         const receipt = await Promise.race([
-            tx.wait(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timeout')), 60000)),
+            tx.wait().finally(() => clearTimeout(timeoutId)),
+            timeoutPromise
         ]);
         if (!receipt) {
             return {
