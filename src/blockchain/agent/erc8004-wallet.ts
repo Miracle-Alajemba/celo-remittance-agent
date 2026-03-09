@@ -5,7 +5,7 @@
  */
 
 import { ethers } from 'ethers';
-import { celoProvider } from '../celo-provider';
+import { celoProvider } from '../celo/celo-provider';
 
 export interface AgentWallet {
   agentId: string;

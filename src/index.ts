@@ -12,7 +12,7 @@ import { compareFees, formatFeeComparison } from './blockchain/agent/fee-compara
 import { findOptimalRoute } from './blockchain/agent/route-optimizer';
 import { getTransactionHistory, getTransactionSummary } from './blockchain/agent/transaction-history';
 import { getScheduledTransfers, getSchedulerStats } from './blockchain/agent/scheduler';
-import { getSwapQuote, getSupportedPairs } from './blockchain/mento-integration';
+import { getSwapQuote, getSupportedPairs } from './blockchain/mento/mento-integration';
 import { getAllWalletBalances, verifyTransactionStatus } from './blockchain/transaction-executor';
 import { getAgentWallet } from './blockchain/agent/erc8004-wallet';
 import { getX402Protocol } from './blockchain/agent/x402-payment';

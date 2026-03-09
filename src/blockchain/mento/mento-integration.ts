@@ -4,7 +4,7 @@
  */
 
 import { ethers } from 'ethers';
-import { celoProvider } from './celo-provider';
+import { celoProvider } from '../celo/celo-provider';
 
 // Celo Stablecoin addresses (Alfajores Testnet)
 export const STABLECOIN_ADDRESSES: { [symbol: string]: string } = {
@@ -145,3 +145,4 @@ export function getRate(pair: string): number | null {
 export function getStablecoinAddress(symbol: string): string | null {
   return STABLECOIN_ADDRESSES[symbol] || null;
 }
+

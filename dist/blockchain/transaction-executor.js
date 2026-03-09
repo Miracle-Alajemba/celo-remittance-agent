@@ -42,7 +42,7 @@ exports.verifyTransactionStatus = verifyTransactionStatus;
 exports.getWalletBalance = getWalletBalance;
 exports.getAllWalletBalances = getAllWalletBalances;
 const ethers_1 = require("ethers");
-const celo_provider_1 = require("./celo-provider");
+const celo_provider_1 = require("./celo/celo-provider");
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
 const STABLECOIN_ADDRESSES = {

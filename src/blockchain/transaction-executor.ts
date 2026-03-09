@@ -4,7 +4,7 @@
  */
 
 import { ethers } from 'ethers';
-import { celoProvider } from './celo-provider';
+import { celoProvider } from './celo/celo-provider';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
