@@ -39,7 +39,7 @@ const RESPONSES: { [lang: string]: { [key: string]: string } } = {
     need_amount: "💰 How much would you like to send? (e.g., $50 or 100 euros)",
     need_recipient: "📍 Where would you like to send the money to? Which country?",
     need_address: "📧 Please provide the recipient's wallet address (0x...)",
-    transfer_success: "✅ **Transfer Successful!**\n\n🔗 Transaction Hash: `{txHash}`\n📦 Block: {blockNumber}\n⛽ Gas Used: {gasUsed}\n\nYour {amount} {currency} has been sent! The recipient will be notified.",
+    transfer_success: "✅ **Transfer Successful!**\n\n💵 **Amount:** {amount} {currency}\n👤 **To:** {recipientName}\n🌍 **Country:** {recipientCountry}\n\n🔗 **Transaction Details**\n└ Hash: `{txHash}`\n└ Block: {blockNumber}\n└ Gas: {gasUsed} gwei\n\n⚡ *Funds are available to the recipient immediately.*",
     transfer_failed: "❌ Transfer failed: {error}\n\nPlease check your balance and try again.",
     balance_info: "💰 **Your Wallet Balance**\n\n{balances}\n\n📊 **Spending Today:** ${dailyUsed}/${dailyLimit}\n📊 **Spending This Month:** ${monthlyUsed}/${monthlyLimit}",
     spending_limit: "🚫 **Spending limit reached!**\n\n{reason}\n\nYou can adjust your limits in settings.",
@@ -55,7 +55,7 @@ const RESPONSES: { [lang: string]: { [key: string]: string } } = {
     need_amount: "💰 ¿Cuánto te gustaría enviar? (ej: $50 o 100 euros)",
     need_recipient: "📍 ¿A dónde te gustaría enviar el dinero? ¿A qué país?",
     need_address: "📧 Por favor proporciona la dirección de billetera del destinatario (0x...)",
-    transfer_success: "✅ **¡Transferencia Exitosa!**\n\n🔗 Hash de Transacción: `{txHash}`\n📦 Bloque: {blockNumber}\n⛽ Gas Usado: {gasUsed}\n\n¡Tus {amount} {currency} han sido enviados! El destinatario será notificado.",
+    transfer_success: "✅ **¡Transferencia Exitosa!**\n\n💵 **Monto:** {amount} {currency}\n👤 **Para:** {recipientName}\n🌍 **País:** {recipientCountry}\n\n🔗 **Detalles de Transacción**\n└ Hash: `{txHash}`\n└ Bloque: {blockNumber}\n└ Gas: {gasUsed}\n\n⚡ *Los fondos ya están disponibles para el destinatario.*",
     transfer_failed: "❌ Transferencia fallida: {error}\n\nPor favor verifica tu saldo e intenta de nuevo.",
     help: "🤖 **Agente de Remesas Celo - Ayuda**\n\n**Lo que puedo hacer:**\n🔸 Enviar dinero globalmente\n🔸 Comparar tarifas vs Western Union, Wise\n🔸 Programar transferencias recurrentes\n🔸 Historial de transacciones\n\n**Idiomas:** English, Español, Português, Français",
     balance_info: "💰 **Tu Saldo**\n\n{balances}",
@@ -187,6 +187,8 @@ export class AgentOrchestrator {
         return await this.handleSendIntent(intent);
       case 'check_balance':
         return this.handleBalanceCheck(lang);
+      case 'wallet':
+        return this.handleWalletInfo(lang);
       case 'history':
         return this.handleHistory(lang);
       case 'compare_fees':
@@ -340,18 +342,28 @@ export class AgentOrchestrator {
       return this.createResponse(cancelMsg, 'text', lang, ['Send again', 'Check balance']);
     }
 
-    if (isConfirmed) {
+   if (isConfirmed) {
       // Execute the transfer on blockchain
       const intent = pending.intent;
       const route = pending.route;
       const recipientAddress = intent.recipientAddress || process.env.RECIPIENT_ADDRESS || '0x1234567890123456789012345678901234567890';
       const sourceCurrency = intent.sourceCurrency || 'USD';
 
+      // 🛠️ FIX: Map real-world currency to Celo Blockchain Token names
+      const tokenMap: {[key: string]: string } = {
+        'USD': 'cUSD',  // Map USD to Celo Dollar
+        'EUR': 'cEUR',  // Map EUR to Celo Euro
+        'BRL': 'BRLm',  // Map BRL to Mento Real
+        'COP': 'COPm',  // Map COP to Mento Peso
+        'XOF': 'XOFm'   // Map XOF to Mento CFA
+      };
+      const blockchainToken = tokenMap[sourceCurrency] || sourceCurrency;
+
       // Execute blockchain transfer
       const executionResult = await executeBlockchainTransfer({
         recipient: recipientAddress,
         amount: intent.amount || '0',
-        currency: sourceCurrency,
+        currency: blockchainToken, // 👈 USE THE MAPPED TOKEN HERE
         recipientName: intent.recipientName || 'Recipient',
         recipientCountry: intent.recipientCountry || '',
       });
@@ -402,12 +414,15 @@ export class AgentOrchestrator {
       // Clear pending
       this.pendingConfirmation = null;
 
+      const countryName = COUNTRY_NAMES[intent.recipientCountry || '']?.[lang] || intent.recipientCountry || 'Unknown';
       const successMsg = responses['transfer_success']
         .replace('{txHash}', txRecord.blockchain.txHash || 'N/A')
         .replace('{blockNumber}', (txRecord.blockchain.blockNumber || 0).toString())
         .replace('{gasUsed}', txRecord.blockchain.gasUsed || '0')
         .replace('{amount}', intent.amount || '0')
-        .replace('{currency}', intent.sourceCurrency || 'USD');
+        .replace('{currency}', intent.sourceCurrency || 'USD')
+        .replace('{recipientName}', intent.recipientName || 'Recipient')
+        .replace('{recipientCountry}', countryName);
 
       const response: AgentResponse = {
         message: successMsg + '\n\n' + (txRecord.receipt?.summary || ''),
@@ -445,9 +460,22 @@ export class AgentOrchestrator {
       .replace('{monthlyUsed}', profile.spendingLimit.monthlyUsed.toFixed(2))
       .replace('{monthlyLimit}', profile.spendingLimit.monthly.toString());
 
-    const response = this.createResponse(msg, 'text', lang, ['Send money', 'View history', 'Compare fees']);
+    const response = this.createResponse(msg, 'text', lang, ['Send money', 'View history', 'My wallet']);
     this.memory.addMessage('agent', response.message);
     return response;
+  }
+
+  private handleWalletInfo(lang: string): AgentResponse {
+    const address = this.agentWallet.walletAddress;
+    const labels: { [l: string]: string } = {
+      en: "🔐 **Your Celo Wallet Address**\n\n`{address}`\n\n*You can send test funds (cUSD, cEUR) to this address on the Alfajores network.*",
+      es: "🔐 **Tu Dirección de Billetera Celo**\n\n`{address}`",
+      pt: "🔐 **Seu Endereço de Carteira Celo**\n\n`{address}`",
+      fr: "🔐 **Votre Adresse de Portefeuille Celo**\n\n`{address}`",
+    };
+
+    const msg = (labels[lang] || labels['en']).replace('{address}', address);
+    return this.createResponse(msg, 'text', lang, ['Check balance', 'Send money']);
   }
 
   private handleHistory(lang: string): AgentResponse {

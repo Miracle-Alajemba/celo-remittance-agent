@@ -119,6 +119,7 @@ exports.startTelegramBot = startTelegramBot;
 // /help - Show this help message
 // /balance - Check your wallet balance
 // /history - View transaction history
+// /wallet - Get your wallet address
 // /schedule - Manage scheduled transfers
 // /settings - Configure preferences
 // /status - Check agent status
@@ -421,6 +422,13 @@ class TelegramBotHandler {
             const response = await agent.processMessage('Show my transaction history');
             await this.sendResponse(ctx, response);
         });
+        // 5. /wallet command
+        this.bot.command('wallet', async (ctx) => {
+            const user = this.registerUser(ctx);
+            const agent = this.getOrCreateAgent(user.id);
+            const response = await agent.processMessage('wallet');
+            await this.sendResponse(ctx, response);
+        });
         // 5. Handle Text Messages (Natural Language)
         this.bot.on('text', async (ctx) => {
             const userId = ctx.from.id;
@@ -507,9 +515,10 @@ class TelegramBotHandler {
      */
     getOrCreateAgent(userId) {
         if (!this.agents.has(userId)) {
-            // In production, fetch real wallet from DB
-            const mockWallet = '0x0000000000000000000000000000000000000000';
-            this.agents.set(userId, new orchestrator_1.AgentOrchestrator(`telegram_${userId}`, mockWallet));
+            // Import at runtime to avoid circular dependencies if any
+            const { celoProvider } = require('../celo/celo-provider');
+            const realWallet = celoProvider.wallet.address;
+            this.agents.set(userId, new orchestrator_1.AgentOrchestrator(`telegram_${userId}`, realWallet));
         }
         return this.agents.get(userId);
     }

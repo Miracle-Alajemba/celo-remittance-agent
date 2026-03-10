@@ -4,7 +4,7 @@
  */
 
 export interface RemittanceIntent {
-  action: 'send' | 'check_balance' | 'history' | 'compare_fees' | 'schedule' | 'cancel' | 'help';
+  action: 'send' | 'check_balance' | 'history' | 'compare_fees' | 'schedule' | 'cancel' | 'help' | 'wallet';
   amount?: string;
   recipientCountry?: string;
   recipientName?: string;
@@ -21,7 +21,8 @@ export interface RemittanceIntent {
 const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
   en: {
     send: ['send', 'transfer', 'pay', 'wire', 'remit', 'transmit'],
-    check_balance: ['balance', 'how much', 'wallet', 'funds', 'available'],
+    check_balance: ['balance', 'how much', 'funds', 'available'],
+    wallet: ['wallet', 'address', 'my address', 'my wallet'],
     history: ['history', 'transactions', 'past', 'previous', 'records', 'receipts'],
     compare_fees: ['compare', 'fees', 'cheaper', 'cost', 'savings', 'save', 'western union', 'wise'],
     schedule: ['schedule', 'recurring', 'every month', 'every week', 'automatic', 'auto'],
@@ -30,7 +31,8 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
   },
   es: {
     send: ['enviar', 'envía', 'transferir', 'mandar', 'pagar', 'girar'],
-    check_balance: ['saldo', 'balance', 'cuánto', 'fondos', 'disponible'],
+    check_balance: ['saldo', 'cuánto', 'fondos', 'disponible'],
+    wallet: ['billetera', 'cartera', 'mi dirección', 'mi wallet'],
     history: ['historial', 'transacciones', 'pasadas', 'anteriores', 'recibos'],
     compare_fees: ['comparar', 'tarifas', 'comisiones', 'más barato', 'costo', 'ahorro'],
     schedule: ['programar', 'recurrente', 'cada mes', 'cada semana', 'automático'],
@@ -39,7 +41,8 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
   },
   pt: {
     send: ['enviar', 'envie', 'transferir', 'mandar', 'pagar', 'remeter'],
-    check_balance: ['saldo', 'quanto', 'carteira', 'fundos', 'disponível'],
+    check_balance: ['saldo', 'quanto', 'fundos', 'disponível'],
+    wallet: ['carteira', 'meu endereço', 'minha carteira'],
     history: ['histórico', 'transações', 'passadas', 'anteriores', 'recibos'],
     compare_fees: ['comparar', 'taxas', 'tarifas', 'mais barato', 'custo', 'economia'],
     schedule: ['agendar', 'programar', 'recorrente', 'todo mês', 'toda semana', 'automático'],
@@ -48,7 +51,8 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
   },
   fr: {
     send: ['envoyer', 'envoie', 'transférer', 'payer', 'virer', 'expédier'],
-    check_balance: ['solde', 'combien', 'portefeuille', 'fonds', 'disponible'],
+    check_balance: ['solde', 'combien', 'fonds', 'disponible'],
+    wallet: ['portefeuille', 'mon adresse'],
     history: ['historique', 'transactions', 'passées', 'précédentes', 'reçus'],
     compare_fees: ['comparer', 'frais', 'commissions', 'moins cher', 'coût', 'économies'],
     schedule: ['planifier', 'programmer', 'récurrent', 'chaque mois', 'chaque semaine', 'automatique'],
