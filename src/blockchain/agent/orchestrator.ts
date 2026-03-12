@@ -13,15 +13,29 @@ import { parseRemittanceIntent, RemittanceIntent } from './intent-parser';
 import { ConversationMemory } from './memory';
 import { findOptimalRoute, TransferRoute } from './route-optimizer';
 import { compareFees, formatFeeComparison, FeeComparison } from './fee-comparator';
-import { createScheduledTransfer, getScheduledTransfers, cancelScheduledTransfer, formatScheduledTransfer, ScheduledTransfer } from './scheduler';
-import { recordTransaction, getTransactionHistory, formatTransactionHistory, getTransactionSummary } from './transaction-history';
+import {
+  createScheduledTransferPersistent,
+  getScheduledTransfersPersistent,
+  cancelScheduledTransferPersistent,
+  formatScheduledTransfer,
+  ScheduledTransfer,
+} from './scheduler';
+import {
+  recordTransaction,
+  getTransactionHistoryPersistent,
+  formatTransactionHistory,
+  getTransactionSummaryFromRecords,
+} from './transaction-history';
 import { enhanceIntentWithLLM } from './llm-service';
-import { getOrCreateUser, checkSpendingLimit, recordSpending, getSpendingSummary } from './user-profile';
-import { executeBlockchainTransfer } from '../transaction-executor';
+import { getOrCreateUser, checkSpendingLimit, recordSpending, getSpendingSummary, getUser, updateUserProfile } from './user-profile';
+import { executeBlockchainTransfer, getAllWalletBalances } from '../transaction-executor'; // 👈 IMPORT ADDED HERE
 import { getAgentWallet, ERC8004Wallet } from './erc8004-wallet';
 import { getX402Protocol, X402PaymentProtocol } from './x402-payment';
 import { getSkillsFramework, CeloSkillsFramework } from './celo-skills';
 import { getAgentScanner, AgentScanner } from './agentscan';
+import { createTransaction as createTransactionDB } from '../../database/services';
+import { isDbConnected } from '../../database/connection';
+import { notifyTransferComplete, notifyTransferFailed } from './notification-service';
 
 export interface AgentResponse {
   message: string;
@@ -119,6 +133,8 @@ export class AgentOrchestrator {
   private x402Protocol: X402PaymentProtocol;
   private skillsFramework: CeloSkillsFramework;
   private agentScanner: AgentScanner;
+  private pendingWalletRequest: boolean = false;
+  private pendingSendIntent: RemittanceIntent | null = null;
   private pendingConfirmation: {
     intent: RemittanceIntent;
     route: TransferRoute;
@@ -126,7 +142,7 @@ export class AgentOrchestrator {
   } | null = null;
 
   constructor(userId: string = 'default_user', walletAddress: string = '0x0000000000000000000000000000000000000000') {
-    this.memory = new ConversationMemory();
+    this.memory = new ConversationMemory(userId);
     this.userId = userId;
     this.walletAddress = walletAddress;
 
@@ -143,12 +159,81 @@ export class AgentOrchestrator {
     this.agentScanner = getAgentScanner();
 
     // Initialize user profile
-    getOrCreateUser(userId, walletAddress);
+    void this.memory.init();
+    void getOrCreateUser(userId, walletAddress);
   }
 
   async processMessage(userMessage: string): Promise<AgentResponse> {
     // Store user message
     this.memory.addMessage('user', userMessage);
+
+    const existingProfile = await getUser(this.userId);
+    const preferredLang = existingProfile?.language || this.memory.getUserProfile().preferredLanguage;
+
+    // Capture wallet address if user provides it directly
+    const directAddress = this.extractAddress(userMessage);
+    if (directAddress && /wallet|address|cartera|billetera|carteira|portefeuille/i.test(userMessage)) {
+      await updateUserProfile(this.userId, { walletAddress: directAddress });
+      this.walletAddress = directAddress;
+      this.memory.setUserProfile({ walletAddress: directAddress });
+      this.pendingWalletRequest = false;
+      const confirm = this.createResponse(
+        `✅ Wallet address saved: ${directAddress}`,
+        'text',
+        'en',
+        ['Check balance', 'Send money']
+      );
+      this.memory.addMessage('agent', confirm.message);
+      return confirm;
+    }
+
+    // Handle pending send intent slot-filling
+    if (this.pendingSendIntent) {
+      const addr = this.extractAddress(userMessage);
+      if (addr) {
+        const merged = {
+          ...this.pendingSendIntent,
+          recipientAddress: addr,
+          action: 'send',
+        } as RemittanceIntent;
+        this.pendingSendIntent = null;
+        return await this.handleSendIntent(merged);
+      }
+
+      const partial = parseRemittanceIntent(userMessage);
+      const merged = this.mergeIntent(this.pendingSendIntent, partial);
+      this.pendingSendIntent = null;
+      return await this.handleSendIntent(merged);
+    }
+
+    // Handle pending wallet address capture
+    if (this.pendingWalletRequest) {
+      const address = this.extractAddress(userMessage);
+      if (!address) {
+        const lang = this.memory.getLastIntent()?.detectedLanguage || 'en';
+        const msg = lang === 'es'
+          ? 'Por favor proporciona una dirección válida (0x...).'
+          : lang === 'pt'
+          ? 'Por favor forneça um endereço válido (0x...).'
+          : lang === 'fr'
+          ? 'Veuillez fournir une adresse valide (0x...).'
+          : 'Please provide a valid wallet address (0x...).';
+        return this.createResponse(msg, 'text', lang);
+      }
+
+      await updateUserProfile(this.userId, { walletAddress: address });
+      this.walletAddress = address;
+      this.memory.setUserProfile({ walletAddress: address });
+      this.pendingWalletRequest = false;
+      const confirm = this.createResponse(
+        `✅ Wallet address saved: ${address}`,
+        'text',
+        'en',
+        ['Check balance', 'Send money']
+      );
+      this.memory.addMessage('agent', confirm.message);
+      return confirm;
+    }
 
     // Check for confirmation of pending transfer
     if (this.pendingConfirmation) {
@@ -158,6 +243,17 @@ export class AgentOrchestrator {
     // Parse intent (keyword-based as fallback)
     let intent = parseRemittanceIntent(userMessage);
     let lang = intent.detectedLanguage;
+
+    if (preferredLang) {
+      lang = preferredLang;
+      intent.detectedLanguage = preferredLang;
+    } else {
+      const hasLetters = /[A-Za-zÀ-ÿ]/.test(userMessage);
+      if (hasLetters) {
+        await updateUserProfile(this.userId, { language: intent.detectedLanguage });
+        this.memory.setUserProfile({ preferredLanguage: intent.detectedLanguage });
+      }
+    }
 
     // Enhance intent with Claude LLM for better understanding
     try {
@@ -179,6 +275,28 @@ export class AgentOrchestrator {
       console.log('LLM enhancement failed, using keyword-based intent');
     }
 
+    if (
+      intent.action === 'help' &&
+      (intent.amount || intent.recipientCountry || intent.recipientAddress || intent.sourceCurrency)
+    ) {
+      intent.action = 'send';
+    }
+
+    const lastIntent = this.memory.getLastIntent();
+    const hasNewSendFields = Boolean(
+      intent.amount ||
+      intent.recipientCountry ||
+      intent.recipientAddress ||
+      intent.recipientName ||
+      intent.sourceCurrency ||
+      intent.targetCurrency ||
+      intent.frequency
+    );
+
+    if (lastIntent && lastIntent.action === 'send' && hasNewSendFields) {
+      intent = this.mergeIntent(lastIntent as RemittanceIntent, intent);
+    }
+
     this.memory.setLastIntent(intent);
 
     // Route to appropriate handler
@@ -186,17 +304,17 @@ export class AgentOrchestrator {
       case 'send':
         return await this.handleSendIntent(intent);
       case 'check_balance':
-        return this.handleBalanceCheck(lang);
+        return await this.handleBalanceCheck(lang); // 👈 AWAIT ADDED HERE
       case 'wallet':
-        return this.handleWalletInfo(lang);
+        return await this.handleWalletInfo(lang, userMessage);
       case 'history':
-        return this.handleHistory(lang);
+        return await this.handleHistory(lang);
       case 'compare_fees':
         return this.handleFeeComparison(intent);
       case 'schedule':
         return await this.handleSchedule(intent);
       case 'cancel':
-        return this.handleCancel(lang);
+        return await this.handleCancel(lang);
       case 'help':
         return this.handleHelp(lang);
       default:
@@ -210,13 +328,22 @@ export class AgentOrchestrator {
 
     // Check for missing required info
     if (!intent.amount) {
+      this.pendingSendIntent = intent;
       const response = this.createResponse(responses['need_amount'], 'text', lang);
       this.memory.addMessage('agent', response.message);
       return response;
     }
 
     if (!intent.recipientCountry) {
+      this.pendingSendIntent = intent;
       const response = this.createResponse(responses['need_recipient'], 'text', lang);
+      this.memory.addMessage('agent', response.message);
+      return response;
+    }
+
+    if (!intent.recipientAddress) {
+      this.pendingSendIntent = intent;
+      const response = this.createResponse(responses['need_address'], 'text', lang);
       this.memory.addMessage('agent', response.message);
       return response;
     }
@@ -224,7 +351,7 @@ export class AgentOrchestrator {
     const amount = parseFloat(intent.amount);
 
     // Check spending limits using user profile
-    const spendingCheck = checkSpendingLimit(this.userId, amount);
+    const spendingCheck = await checkSpendingLimit(this.userId, amount);
     if (!spendingCheck.canSpend) {
       const response = this.createResponse(
         responses['spending_limit'].replace('{reason}', spendingCheck.reason || ''),
@@ -259,7 +386,7 @@ export class AgentOrchestrator {
 
     // Build preview
     const countryName = COUNTRY_NAMES[intent.recipientCountry || '']?.[lang] || intent.recipientCountry || 'Unknown';
-    const frequencyLabels: { [f: string]: { [l: string]: string } } = {
+    const frequencyLabels: {[f: string]: { [l: string]: string } } = {
       once: { en: 'One-time', es: 'Una vez', pt: 'Uma vez', fr: 'Unique' },
       weekly: { en: 'Weekly', es: 'Semanal', pt: 'Semanal', fr: 'Hebdomadaire' },
       biweekly: { en: 'Bi-weekly', es: 'Quincenal', pt: 'Quinzenal', fr: 'Bimensuel' },
@@ -283,12 +410,12 @@ export class AgentOrchestrator {
     this.pendingConfirmation = { intent, route: bestRoute, comparison };
 
     const suggestedActions = lang === 'es'
-      ? ['✅ Sí, enviar', '❌ Cancelar', '📊 Ver comparación completa']
+      ?['✅ Sí, enviar', '❌ Cancelar', '📊 Ver comparación completa']
       : lang === 'pt'
-      ? ['✅ Sim, enviar', '❌ Cancelar', '📊 Ver comparação completa']
+      ?['✅ Sim, enviar', '❌ Cancelar', '📊 Ver comparação completa']
       : lang === 'fr'
-      ? ['✅ Oui, envoyer', '❌ Annuler', '📊 Voir comparaison complète']
-      : ['✅ Yes, send it', '❌ Cancel', '📊 View full comparison'];
+      ?['✅ Oui, envoyer', '❌ Annuler', '📊 Voir comparaison complète']
+      :['✅ Yes, send it', '❌ Cancel', '📊 View full comparison'];
 
     const response: AgentResponse = {
       message: preview,
@@ -322,7 +449,7 @@ export class AgentOrchestrator {
           type: 'fee_comparison',
           data: pending.comparison,
           suggestedActions: lang === 'es'
-            ? ['✅ Sí, enviar', '❌ Cancelar']
+            ?['✅ Sí, enviar', '❌ Cancelar']
             : ['✅ Yes, send it', '❌ Cancel'],
           language: lang,
         };
@@ -330,8 +457,8 @@ export class AgentOrchestrator {
     }
 
     // Check for confirmation
-    const confirmWords = ['yes', 'si', 'sí', 'sim', 'oui', 'ok', 'proceed', 'send', 'confirm', 'enviar', 'envoyer', 'confirmar'];
-    const cancelWords = ['no', 'cancel', 'cancelar', 'annuler', 'stop', 'never', 'non'];
+    const confirmWords =['yes', 'si', 'sí', 'sim', 'oui', 'ok', 'proceed', 'send', 'confirm', 'enviar', 'envoyer', 'confirmar'];
+    const cancelWords =['no', 'cancel', 'cancelar', 'annuler', 'stop', 'never', 'non'];
 
     const isConfirmed = confirmWords.some(w => lower.includes(w));
     const isCancelled = cancelWords.some(w => lower.includes(w));
@@ -339,7 +466,7 @@ export class AgentOrchestrator {
     if (isCancelled) {
       this.pendingConfirmation = null;
       const cancelMsg = lang === 'es' ? '❌ Transferencia cancelada.' : lang === 'pt' ? '❌ Transferência cancelada.' : lang === 'fr' ? '❌ Transfert annulé.' : '❌ Transfer cancelled.';
-      return this.createResponse(cancelMsg, 'text', lang, ['Send again', 'Check balance']);
+      return this.createResponse(cancelMsg, 'text', lang,['Send again', 'Check balance']);
     }
 
    if (isConfirmed) {
@@ -349,7 +476,7 @@ export class AgentOrchestrator {
       const recipientAddress = intent.recipientAddress || process.env.RECIPIENT_ADDRESS || '0x1234567890123456789012345678901234567890';
       const sourceCurrency = intent.sourceCurrency || 'USD';
 
-      // 🛠️ FIX: Map real-world currency to Celo Blockchain Token names
+      // Map real-world currency to Celo Blockchain Token names
       const tokenMap: {[key: string]: string } = {
         'USD': 'cUSD',  // Map USD to Celo Dollar
         'EUR': 'cEUR',  // Map EUR to Celo Euro
@@ -363,7 +490,7 @@ export class AgentOrchestrator {
       const executionResult = await executeBlockchainTransfer({
         recipient: recipientAddress,
         amount: intent.amount || '0',
-        currency: blockchainToken, // 👈 USE THE MAPPED TOKEN HERE
+        currency: blockchainToken,
         recipientName: intent.recipientName || 'Recipient',
         recipientCountry: intent.recipientCountry || '',
       });
@@ -387,19 +514,47 @@ export class AgentOrchestrator {
         gasUsed: executionResult.gasUsed || '21000',
       });
 
+      if (isDbConnected()) {
+        try {
+          await createTransactionDB({
+            userId: this.userId,
+            type: intent.frequency !== 'once' ? 'scheduled' : 'send',
+            senderAddress: '0xYourWalletAddress',
+            recipientAddress,
+            recipientName: intent.recipientName || 'Recipient',
+            recipientCountry: intent.recipientCountry || '',
+            sendAmount: parseFloat(intent.amount || '0'),
+            sendCurrency: sourceCurrency,
+            receiveAmount: route.estimatedOutput,
+            receiveCurrency: intent.targetCurrency || 'USD',
+            exchangeRate: route.path[0].rate,
+            networkFee: 0.001,
+            swapFee: route.totalFeeUSD,
+            txHash: executionResult.txHash || txRecord.blockchain.txHash || '',
+            blockNumber: executionResult.blockNumber,
+            gasUsed: executionResult.gasUsed,
+            status: executionResult.success ? 'completed' : 'failed',
+          });
+        } catch (error) {
+          console.error('[DB] Failed to record transaction:', error);
+        }
+      }
+
       // If blockchain execution failed, show error
       if (!executionResult.success) {
+        await this.notifyTransferFailure(intent, sourceCurrency, executionResult.error || 'Unknown error');
         const errorMsg = responses['transfer_failed'].replace('{error}', executionResult.error || 'Unknown error');
         this.pendingConfirmation = null;
         return this.createResponse(errorMsg, 'error', lang, ['Try again', 'Check balance']);
       }
 
       // Record spending in user profile
-      recordSpending(this.userId, parseFloat(intent.amount || '0'));
+      await recordSpending(this.userId, parseFloat(intent.amount || '0'));
 
       // Create scheduled transfer if recurring
       if (intent.frequency && intent.frequency !== 'once') {
-        createScheduledTransfer({
+        await createScheduledTransferPersistent({
+          userId: this.userId,
           recipientAddress,
           recipientName: intent.recipientName || 'Recipient',
           recipientCountry: intent.recipientCountry || '',
@@ -428,11 +583,12 @@ export class AgentOrchestrator {
         message: successMsg + '\n\n' + (txRecord.receipt?.summary || ''),
         type: 'receipt',
         data: txRecord,
-        suggestedActions: ['View history', 'Send another', 'Compare fees'],
+        suggestedActions:['View history', 'Send another', 'Compare fees'],
         language: lang,
       };
 
       this.memory.addMessage('agent', response.message);
+      await this.notifyTransferSuccess(intent, sourceCurrency, txRecord.blockchain.txHash);
       return response;
     }
 
@@ -441,47 +597,110 @@ export class AgentOrchestrator {
     return this.createResponse(askAgain, 'text', lang, ['Yes', 'No', 'View comparison']);
   }
 
-  private handleBalanceCheck(lang: string): AgentResponse {
+  // 👈 REAL BLOCKCHAIN LOGIC ADDED HERE
+  private async handleBalanceCheck(lang: string): Promise<AgentResponse> {
     const responses = RESPONSES[lang] || RESPONSES['en'];
     const profile = this.memory.getUserProfile();
+    const user = await getUser(this.userId);
+    if (user?.walletAddress) {
+      this.walletAddress = user.walletAddress;
+      this.memory.setUserProfile({ walletAddress: user.walletAddress });
+    }
+    const memoryWallet = this.memory.getUserProfile().walletAddress;
+    const walletAddress =
+      this.getUserWalletAddress(memoryWallet) ||
+      this.getUserWalletAddress(user?.walletAddress) ||
+      this.getUserWalletAddress(this.walletAddress);
 
-    // Simulated balances (in production, query actual blockchain)
-    const balances = [
-      '💵 USDm (Mento Dollar): $1,250.00',
-      '💶 EURm (Mento Euro): €890.00',
-      '🇧🇷 BRLm (Mento Real): R$3,200.00',
-      '🔵 CELO: 45.32 CELO',
-    ].join('\n');
+    if (!walletAddress) {
+      const prompt = lang === 'es'
+        ? 'Primero envíame tu dirección de billetera (0x...) para consultar tu saldo.'
+        : lang === 'pt'
+        ? 'Primeiro, envie seu endereço de carteira (0x...) para consultar seu saldo.'
+        : lang === 'fr'
+        ? 'Veuillez d’abord envoyer votre adresse de portefeuille (0x...) pour vérifier le solde.'
+        : 'Please send your wallet address (0x...) first so I can check your balance.';
+      this.pendingWalletRequest = true;
+      return this.createResponse(prompt, 'text', lang);
+    }
 
-    const msg = responses['balance_info']
-      .replace('{balances}', balances)
-      .replace('{dailyUsed}', profile.spendingLimit.dailyUsed.toFixed(2))
-      .replace('{dailyLimit}', profile.spendingLimit.daily.toString())
-      .replace('{monthlyUsed}', profile.spendingLimit.monthlyUsed.toFixed(2))
-      .replace('{monthlyLimit}', profile.spendingLimit.monthly.toString());
+    try {
+      // Fetch REAL balances from the Celo blockchain
+      const realBalances = await getAllWalletBalances(walletAddress);
 
-    const response = this.createResponse(msg, 'text', lang, ['Send money', 'View history', 'My wallet']);
-    this.memory.addMessage('agent', response.message);
-    return response;
+      const balances = [
+        `🔵 CELO: ${realBalances['CELO'] || '0.00'} CELO`,
+        `💵 cUSD (Celo Dollar): $${realBalances['cUSD'] || '0.00'}`,
+        `💶 cEUR (Celo Euro): €${realBalances['cEUR'] || '0.00'}`,
+        `🇧🇷 BRLm (Mento Real): R$${realBalances['BRLm'] || '0.00'}`,
+      ].join('\n');
+
+      const msg = responses['balance_info']
+        .replace('{balances}', balances)
+        .replace('{dailyUsed}', profile.spendingLimit.dailyUsed.toFixed(2))
+        .replace('{dailyLimit}', profile.spendingLimit.daily.toString())
+        .replace('{monthlyUsed}', profile.spendingLimit.monthlyUsed.toFixed(2))
+        .replace('{monthlyLimit}', profile.spendingLimit.monthly.toString());
+
+      const response = this.createResponse(msg, 'text', lang,['Send money', 'View history', 'My wallet']);
+      this.memory.addMessage('agent', response.message);
+      return response;
+    } catch (error) {
+      console.error("Balance fetch error:", error);
+      return this.createResponse("⚠️ Error fetching real balance from Celo blockchain.", 'error', lang);
+    }
   }
 
-  private handleWalletInfo(lang: string): AgentResponse {
-    const address = this.agentWallet.walletAddress;
+  private async handleWalletInfo(lang: string, userMessage?: string): Promise<AgentResponse> {
+    const address = this.extractAddress(userMessage || '');
+    if (address) {
+      await updateUserProfile(this.userId, { walletAddress: address });
+      this.walletAddress = address;
+      this.memory.setUserProfile({ walletAddress: address });
+      this.pendingWalletRequest = false;
+      const msg = `✅ Wallet address saved: ${address}`;
+      return this.createResponse(msg, 'text', lang, ['Check balance', 'Send money']);
+    }
+
+    const user = await getUser(this.userId);
+    if (user?.walletAddress) {
+      this.walletAddress = user.walletAddress;
+      this.memory.setUserProfile({ walletAddress: user.walletAddress });
+    }
+    const memoryWallet = this.memory.getUserProfile().walletAddress;
+    const userWallet =
+      this.getUserWalletAddress(memoryWallet) ||
+      this.getUserWalletAddress(user?.walletAddress) ||
+      this.getUserWalletAddress(this.walletAddress);
+    const hasUserWallet = Boolean(userWallet);
+
     const labels: { [l: string]: string } = {
-      en: "🔐 **Your Celo Wallet Address**\n\n`{address}`\n\n*You can send test funds (cUSD, cEUR) to this address on the Alfajores network.*",
+      en: "🔐 **Your Celo Wallet Address**\n\n`{address}`",
       es: "🔐 **Tu Dirección de Billetera Celo**\n\n`{address}`",
       pt: "🔐 **Seu Endereço de Carteira Celo**\n\n`{address}`",
       fr: "🔐 **Votre Adresse de Portefeuille Celo**\n\n`{address}`",
     };
 
-    const msg = (labels[lang] || labels['en']).replace('{address}', address);
+    if (!hasUserWallet) {
+      this.pendingWalletRequest = true;
+      const prompt = lang === 'es'
+        ? 'Por favor envíame tu dirección de billetera (0x...).'
+        : lang === 'pt'
+        ? 'Por favor me envie seu endereço de carteira (0x...).'
+        : lang === 'fr'
+        ? 'Veuillez m’envoyer votre adresse de portefeuille (0x...).'
+        : 'Please send me your wallet address (0x...).';
+      return this.createResponse(prompt, 'text', lang);
+    }
+
+    const msg = (labels[lang] || labels['en']).replace('{address}', userWallet as string);
     return this.createResponse(msg, 'text', lang, ['Check balance', 'Send money']);
   }
 
-  private handleHistory(lang: string): AgentResponse {
-    const history = getTransactionHistory(10);
+  private async handleHistory(lang: string): Promise<AgentResponse> {
+    const history = await getTransactionHistoryPersistent(this.userId, 10);
     const formatted = formatTransactionHistory(history, lang);
-    const summary = getTransactionSummary();
+    const summary = getTransactionSummaryFromRecords(history);
 
     let msg = formatted;
     if (history.length > 0) {
@@ -520,7 +739,7 @@ export class AgentOrchestrator {
       message: formatted,
       type: 'fee_comparison',
       data: comparison,
-      suggestedActions: ['Send now', 'Try different amount', 'View history'],
+      suggestedActions:['Send now', 'Try different amount', 'View history'],
       language: lang,
     };
 
@@ -534,7 +753,7 @@ export class AgentOrchestrator {
 
     // If checking scheduled transfers
     if (!intent.amount) {
-      const schedules = getScheduledTransfers('active');
+      const schedules = await getScheduledTransfersPersistent(this.userId, 'active');
       if (schedules.length === 0) {
         const response = this.createResponse(responses['no_schedules'], 'text', lang);
         this.memory.addMessage('agent', response.message);
@@ -558,16 +777,16 @@ export class AgentOrchestrator {
     return await this.handleSendIntent(intent);
   }
 
-  private handleCancel(lang: string): AgentResponse {
+  private async handleCancel(lang: string): Promise<AgentResponse> {
     const responses = RESPONSES[lang] || RESPONSES['en'];
-    const schedules = getScheduledTransfers('active');
+    const schedules = await getScheduledTransfersPersistent(this.userId, 'active');
 
     if (schedules.length === 0) {
       return this.createResponse(responses['no_schedules'], 'text', lang);
     }
 
     // Cancel the most recent one (in production, ask which one)
-    const cancelled = cancelScheduledTransfer(schedules[0].id);
+    const cancelled = await cancelScheduledTransferPersistent(this.userId, schedules[0].id);
     if (cancelled) {
       return this.createResponse(responses['schedule_cancelled'], 'text', lang, ['View schedules', 'Send money']);
     }
@@ -582,7 +801,7 @@ export class AgentOrchestrator {
 
   private handleGreeting(lang: string): AgentResponse {
     const responses = RESPONSES[lang] || RESPONSES['en'];
-    const response = this.createResponse(responses['greeting'], 'help', lang, [
+    const response = this.createResponse(responses['greeting'], 'help', lang,[
       'Send money', 'Check balance', 'Compare fees', 'View history',
     ]);
     this.memory.addMessage('agent', response.message);
@@ -591,6 +810,39 @@ export class AgentOrchestrator {
 
   private createResponse(message: string, type: AgentResponse['type'], lang: string, suggestedActions?: string[]): AgentResponse {
     return { message, type, language: lang, suggestedActions };
+  }
+
+  private extractAddress(text: string): string | null {
+    const match = text.match(/(0x[a-fA-F0-9]{40})/);
+    return match ? match[1] : null;
+  }
+
+  private mergeIntent(base: RemittanceIntent, update: RemittanceIntent): RemittanceIntent {
+    const merged: RemittanceIntent = { ...base };
+    const setIf = <K extends keyof RemittanceIntent>(key: K, value: RemittanceIntent[K]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        merged[key] = value;
+      }
+    };
+
+    setIf('action', update.action);
+    setIf('amount', update.amount);
+    setIf('recipientCountry', update.recipientCountry);
+    setIf('recipientName', update.recipientName);
+    setIf('recipientAddress', update.recipientAddress);
+    setIf('sourceCurrency', update.sourceCurrency);
+    setIf('targetCurrency', update.targetCurrency);
+    setIf('frequency', update.frequency);
+    setIf('confidence', update.confidence);
+    setIf('detectedLanguage', update.detectedLanguage);
+    setIf('rawInput', update.rawInput);
+
+    merged.action = 'send';
+    return merged;
+  }
+  private getUserWalletAddress(walletAddress?: string): string | null {
+    if (!walletAddress) return null;
+    return walletAddress;
   }
 
   private getTargetCurrency(countryCode: string): string {
@@ -605,12 +857,69 @@ export class AgentOrchestrator {
     return this.memory;
   }
 
-  getSpendingSummary() {
+  async getSpendingSummary() {
     return getSpendingSummary(this.userId);
   }
 
   clearMemory(): void {
     this.memory.clear();
     this.pendingConfirmation = null;
+  }
+
+  private getNotificationChannels(): ('sms' | 'whatsapp')[] {
+    const raw = process.env.NOTIFY_CHANNELS;
+    if (!raw) return ['sms'];
+    return raw
+      .split(',')
+      .map((v) => v.trim().toLowerCase())
+      .filter((v) => v === 'sms' || v === 'whatsapp') as ('sms' | 'whatsapp')[];
+  }
+
+  private getNotificationRecipient(): { to?: string } {
+    const phone = process.env.RECIPIENT_PHONE;
+    const whatsapp = process.env.RECIPIENT_WHATSAPP;
+    return { to: phone || whatsapp || undefined };
+  }
+
+  private async notifyTransferSuccess(
+    intent: RemittanceIntent,
+    currency: string,
+    txHash?: string
+  ): Promise<void> {
+    const to = this.getNotificationRecipient().to;
+    if (!to) return;
+    await notifyTransferComplete(
+      {
+        to,
+        recipientName: intent.recipientName || 'Recipient',
+        senderName: 'Celo Remittance Agent',
+        amount: intent.amount || '0',
+        currency,
+        txHash,
+        language: intent.detectedLanguage || 'en',
+      },
+      this.getNotificationChannels()
+    );
+  }
+
+  private async notifyTransferFailure(
+    intent: RemittanceIntent,
+    currency: string,
+    error: string
+  ): Promise<void> {
+    const to = this.getNotificationRecipient().to;
+    if (!to) return;
+    await notifyTransferFailed(
+      {
+        to,
+        recipientName: intent.recipientName || 'Recipient',
+        senderName: 'Celo Remittance Agent',
+        amount: intent.amount || '0',
+        currency,
+        txHash: error,
+        language: intent.detectedLanguage || 'en',
+      },
+      this.getNotificationChannels()
+    );
   }
 }

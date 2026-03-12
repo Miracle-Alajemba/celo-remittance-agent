@@ -166,3 +166,18 @@ export async function notifyTransferComplete(
   }
   return results;
 }
+
+export async function notifyTransferFailed(
+  payload: NotificationPayload,
+  channels: ('sms' | 'whatsapp')[] = ['sms']
+): Promise<NotificationResult[]> {
+  const results: NotificationResult[] = [];
+  for (const channel of channels) {
+    if (channel === 'sms') {
+      results.push(await sendSMSNotification(payload, 'transfer_failed'));
+    } else if (channel === 'whatsapp') {
+      results.push(await sendWhatsAppNotification(payload, 'transfer_failed'));
+    }
+  }
+  return results;
+}

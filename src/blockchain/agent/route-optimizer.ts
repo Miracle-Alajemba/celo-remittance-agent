@@ -3,6 +3,8 @@
  * Supports multi-hop routes (e.g., USD → cUSD → cEUR → EUR)
  */
 
+import { getRate as getFxRate } from '../market/rates';
+
 export interface TransferRoute {
   id: string;
   path: RouteHop[];
@@ -37,24 +39,6 @@ const MENTO_POOLS: { [pair: string]: { rate: number; feePercent: number; liquidi
   'USD-XOF': { rate: 615.0, feePercent: 0.25, liquidity: 500000 },
   'EUR-XOF': { rate: 655.957, feePercent: 0.20, liquidity: 800000 },
   'USD-COP': { rate: 4150.0, feePercent: 0.25, liquidity: 500000 },
-};
-
-// Default exchange rates (for corridors without Mento pools)
-const FOREX_RATES: { [pair: string]: number } = {
-  'USD-PHP': 56.5,
-  'USD-NGN': 1580,
-  'USD-KES': 131,
-  'USD-GHS': 15.5,
-  'USD-INR': 83.5,
-  'USD-MXN': 17.2,
-  'EUR-PHP': 61.2,
-  'EUR-NGN': 1720,
-  'EUR-KES': 142,
-  'GBP-PHP': 71.5,
-  'GBP-NGN': 2000,
-  'GBP-KES': 166,
-  'GBP-USD': 1.27,
-  'GBP-EUR': 1.16,
 };
 
 export function findOptimalRoute(
@@ -129,8 +113,10 @@ export function findOptimalRoute(
 
   // Route 3: Through USD intermediary (for non-USD sources)
   if (sourceCurrency !== 'USD') {
-    const toUSD = MENTO_POOLS[`${sourceCurrency}-USD`] || (FOREX_RATES[`${sourceCurrency}-USD`] ? { rate: FOREX_RATES[`${sourceCurrency}-USD`], feePercent: 0.3, liquidity: 1000000 } : null);
-    const forexRate = FOREX_RATES[`USD-${targetCurrency}`];
+    const toUsdRate = getFxRate(sourceCurrency, 'USD');
+    const toUSD = MENTO_POOLS[`${sourceCurrency}-USD`]
+      || (toUsdRate ? { rate: toUsdRate, feePercent: 0.3, liquidity: 1000000 } : null);
+    const forexRate = getFxRate('USD', targetCurrency);
     if (toUSD && forexRate) {
       const fee1 = amount * (toUSD.feePercent / 100);
       const usdAmount = (amount - fee1) * toUSD.rate;
@@ -169,7 +155,7 @@ export function findOptimalRoute(
 
   // Route 4: Default stablecoin route (USD → target via forex)
   const forexPair = `${sourceCurrency}-${targetCurrency}`;
-  const forexRate = FOREX_RATES[forexPair];
+  const forexRate = getFxRate(sourceCurrency, targetCurrency);
   if (forexRate && !directPool) {
     const celoFee = 0.30; // Default Celo transfer fee
     const fee = amount * (celoFee / 100);
@@ -209,6 +195,5 @@ export function findOptimalRoute(
 export function getExchangeRate(from: string, to: string): number {
   const pair = `${from}-${to}`;
   if (MENTO_POOLS[pair]) return MENTO_POOLS[pair].rate;
-  if (FOREX_RATES[pair]) return FOREX_RATES[pair];
-  return 1;
+  return getFxRate(from, to) || 1;
 }

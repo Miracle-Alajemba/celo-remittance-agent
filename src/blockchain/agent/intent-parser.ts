@@ -161,6 +161,7 @@ export function parseRemittanceIntent(userInput: string): RemittanceIntent {
   const detectedLanguage = detectLanguage(userInput);
   let confidence = 0;
   let action: RemittanceIntent['action'] = 'send';
+  let amount: string | undefined;
 
   // Detect action using multi-language keywords
   const langKeywords = ACTION_KEYWORDS[detectedLanguage] || ACTION_KEYWORDS['en'];
@@ -187,7 +188,6 @@ export function parseRemittanceIntent(userInput: string): RemittanceIntent {
     /(\d+(?:[.,]\d{1,2})?)/,
   ];
 
-  let amount: string | undefined;
   for (const pattern of amountPatterns) {
     const match = input.match(pattern);
     if (match) {
@@ -274,6 +274,17 @@ export function parseRemittanceIntent(userInput: string): RemittanceIntent {
   const addressMatch = input.match(/(0x[a-fA-F0-9]{40})/);
   const recipientAddress = addressMatch ? addressMatch[1] : undefined;
   if (recipientAddress) confidence += 0.1;
+
+  // If no explicit action detected, treat as greeting/help unless it's clearly a send intent
+  if (!actionDetected) {
+    if (amount || recipientCountry || recipientAddress || sourceCurrency) {
+      action = 'send';
+      confidence = Math.max(confidence, 0.2);
+    } else {
+      action = 'help';
+      confidence = Math.max(confidence, 0.1);
+    }
+  }
 
   return {
     action,

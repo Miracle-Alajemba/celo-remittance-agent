@@ -3,6 +3,13 @@
  * Manages scheduled/recurring remittance transfers
  */
 
+import { isDbConnected } from '../../database/connection';
+import {
+  createScheduledTransferDB,
+  getScheduledTransfersByUser,
+  cancelScheduledTransferDB,
+} from '../../database/services';
+
 export interface ScheduledTransfer {
   id: string;
   userId: string;
@@ -33,6 +40,10 @@ export interface SchedulerStats {
 
 // In-memory store (in production, use a database)
 const scheduledTransfers: Map<string, ScheduledTransfer> = new Map();
+
+export function resetScheduledTransfers(): void {
+  scheduledTransfers.clear();
+}
 
 export function createScheduledTransfer(params: {
   recipientAddress: string;
@@ -74,12 +85,88 @@ export function createScheduledTransfer(params: {
   return transfer;
 }
 
+export async function createScheduledTransferPersistent(params: {
+  userId: string;
+  recipientAddress: string;
+  recipientName: string;
+  recipientCountry: string;
+  amount: string;
+  sourceCurrency: string;
+  targetCurrency: string;
+  frequency: 'weekly' | 'biweekly' | 'monthly';
+  notifyRecipient?: boolean;
+  notifyPhone?: string;
+  maxExecutions?: number;
+}): Promise<ScheduledTransfer> {
+  const inMemory = createScheduledTransfer({
+    recipientAddress: params.recipientAddress,
+    recipientName: params.recipientName,
+    recipientCountry: params.recipientCountry,
+    amount: params.amount,
+    sourceCurrency: params.sourceCurrency,
+    targetCurrency: params.targetCurrency,
+    frequency: params.frequency,
+    notifyRecipient: params.notifyRecipient,
+    notifyPhone: params.notifyPhone,
+    maxExecutions: params.maxExecutions,
+  });
+
+  if (isDbConnected()) {
+    await createScheduledTransferDB({
+      userId: params.userId,
+      recipientAddress: params.recipientAddress,
+      recipientName: params.recipientName,
+      recipientCountry: params.recipientCountry,
+      amount: parseFloat(params.amount),
+      sourceCurrency: params.sourceCurrency,
+      targetCurrency: params.targetCurrency,
+      frequency: params.frequency,
+      nextExecutionDate: inMemory.nextExecutionDate,
+      status: 'active',
+      executionCount: 0,
+      notifyRecipient: Boolean(params.notifyRecipient),
+      notifyPhone: params.notifyPhone,
+      maxExecutions: params.maxExecutions,
+    });
+  }
+
+  return inMemory;
+}
+
 export function getScheduledTransfers(status?: string): ScheduledTransfer[] {
   const transfers = Array.from(scheduledTransfers.values());
   if (status) {
     return transfers.filter((t) => t.status === status);
   }
   return transfers;
+}
+
+export async function getScheduledTransfersPersistent(userId: string, status?: string): Promise<ScheduledTransfer[]> {
+  if (!isDbConnected()) {
+    return getScheduledTransfers(status);
+  }
+
+  const rows = await getScheduledTransfersByUser(userId, status);
+  return rows.map((t) => ({
+    id: t.id,
+    userId: t.userId,
+    recipientAddress: t.recipientAddress,
+    recipientName: t.recipientName,
+    recipientCountry: t.recipientCountry,
+    amount: t.amount.toString(),
+    sourceCurrency: t.sourceCurrency,
+    targetCurrency: t.targetCurrency,
+    frequency: t.frequency,
+    nextExecutionDate: t.nextExecutionDate,
+    lastExecutionDate: t.lastExecutionDate || undefined,
+    status: t.status,
+    executionCount: t.executionCount,
+    maxExecutions: t.maxExecutions,
+    notifyRecipient: t.notifyRecipient,
+    notifyPhone: t.notifyPhone,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+  }));
 }
 
 export function getScheduledTransferById(id: string): ScheduledTransfer | undefined {
@@ -94,6 +181,15 @@ export function cancelScheduledTransfer(id: string): boolean {
     return true;
   }
   return false;
+}
+
+export async function cancelScheduledTransferPersistent(userId: string, id: string): Promise<boolean> {
+  const cancelled = cancelScheduledTransfer(id);
+  if (isDbConnected()) {
+    const dbCancelled = await cancelScheduledTransferDB(id);
+    return Boolean(dbCancelled) || cancelled;
+  }
+  return cancelled;
 }
 
 export function pauseScheduledTransfer(id: string): boolean {
@@ -143,6 +239,25 @@ export function getDueTransfers(): ScheduledTransfer[] {
 
 export function getSchedulerStats(): SchedulerStats {
   const transfers = Array.from(scheduledTransfers.values());
+  const active = transfers.filter((t) => t.status === 'active');
+  const nextExecution = active.length > 0
+    ? new Date(Math.min(...active.map((t) => t.nextExecutionDate.getTime())))
+    : undefined;
+
+  return {
+    totalScheduled: transfers.length,
+    activeScheduled: active.length,
+    totalExecuted: transfers.reduce((sum, t) => sum + t.executionCount, 0),
+    nextExecution,
+  };
+}
+
+export async function getSchedulerStatsPersistent(userId: string): Promise<SchedulerStats> {
+  if (!isDbConnected()) {
+    return getSchedulerStats();
+  }
+
+  const transfers = await getScheduledTransfersByUser(userId);
   const active = transfers.filter((t) => t.status === 'active');
   const nextExecution = active.length > 0
     ? new Date(Math.min(...active.map((t) => t.nextExecutionDate.getTime())))

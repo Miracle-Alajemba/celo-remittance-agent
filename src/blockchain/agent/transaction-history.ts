@@ -2,6 +2,9 @@
  * Transaction History & Receipt Manager
  */
 
+import { isDbConnected } from '../../database/connection';
+import { getTransactionsByUser } from '../../database/services';
+
 export interface TransactionRecord {
   id: string;
   type: 'send' | 'swap' | 'scheduled';
@@ -41,6 +44,10 @@ export interface TransactionReceipt {
 
 // In-memory transaction store
 const transactions: TransactionRecord[] = [];
+
+export function resetTransactionHistory(): void {
+  transactions.length = 0;
+}
 
 export function recordTransaction(params: {
   type: 'send' | 'swap' | 'scheduled';
@@ -102,6 +109,45 @@ export function getTransactionHistory(limit: number = 10): TransactionRecord[] {
   return transactions.slice(-limit).reverse();
 }
 
+export async function getTransactionHistoryPersistent(
+  userId: string,
+  limit: number = 10
+): Promise<TransactionRecord[]> {
+  if (!isDbConnected()) {
+    return getTransactionHistory(limit);
+  }
+
+  const rows = await getTransactionsByUser(userId, limit);
+  return rows.map((t) => ({
+    id: t.id,
+    type: t.type === 'received' ? 'send' : t.type,
+    status: t.status === 'completed' ? 'confirmed' : t.status === 'failed' ? 'failed' : 'pending',
+    timestamp: t.createdAt,
+    sender: t.senderAddress,
+    recipient: {
+      name: t.recipientName,
+      address: t.recipientAddress,
+      country: t.recipientCountry,
+    },
+    sendAmount: t.sendAmount,
+    sendCurrency: t.sendCurrency,
+    receiveAmount: t.receiveAmount,
+    receiveCurrency: t.receiveCurrency,
+    exchangeRate: t.exchangeRate,
+    fees: {
+      networkFee: t.networkFee || 0,
+      swapFee: t.swapFee || 0,
+      totalFee: (t.networkFee || 0) + (t.swapFee || 0),
+    },
+    blockchain: {
+      txHash: t.txHash,
+      blockNumber: t.blockNumber,
+      gasUsed: t.gasUsed,
+      network: 'Celo Alfajores',
+    },
+  }));
+}
+
 export function getTransactionById(id: string): TransactionRecord | undefined {
   return transactions.find((t) => t.id === id);
 }
@@ -117,13 +163,22 @@ export function getTransactionSummary(): {
   totalFeesPaid: number;
   mostFrequentCorridor: string;
 } {
-  const totalSent = transactions.reduce((sum, t) => sum + t.sendAmount, 0);
-  const uniqueRecipients = new Set(transactions.map((t) => t.recipient.address)).size;
-  const totalFeesPaid = transactions.reduce((sum, t) => sum + t.fees.totalFee, 0);
+  return getTransactionSummaryFromRecords(transactions);
+}
 
-  // Most frequent corridor
+export function getTransactionSummaryFromRecords(records: TransactionRecord[]): {
+  totalSent: number;
+  totalTransactions: number;
+  uniqueRecipients: number;
+  totalFeesPaid: number;
+  mostFrequentCorridor: string;
+} {
+  const totalSent = records.reduce((sum, t) => sum + t.sendAmount, 0);
+  const uniqueRecipients = new Set(records.map((t) => t.recipient.address)).size;
+  const totalFeesPaid = records.reduce((sum, t) => sum + t.fees.totalFee, 0);
+
   const corridors: { [key: string]: number } = {};
-  transactions.forEach((t) => {
+  records.forEach((t) => {
     const corridor = `${t.sendCurrency}→${t.receiveCurrency}`;
     corridors[corridor] = (corridors[corridor] || 0) + 1;
   });
@@ -131,7 +186,7 @@ export function getTransactionSummary(): {
 
   return {
     totalSent: Math.round(totalSent * 100) / 100,
-    totalTransactions: transactions.length,
+    totalTransactions: records.length,
     uniqueRecipients,
     totalFeesPaid: Math.round(totalFeesPaid * 100) / 100,
     mostFrequentCorridor: mostFrequent ? mostFrequent[0] : 'N/A',

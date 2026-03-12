@@ -7,15 +7,20 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/celo-remittance';
+const MONGODB_URI = process.env.MONGODB_URI || '';
 
 export async function connectDB(): Promise<void> {
   try {
+    if (!MONGODB_URI) {
+      console.warn('⚠️ MONGODB_URI is not set. Skipping MongoDB connection.');
+      return;
+    }
+
     await mongoose.connect(MONGODB_URI);
     console.log('✅ MongoDB connected');
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
-    process.exit(1);
+    console.warn('⚠️ Continuing without MongoDB. Some features may be disabled.');
   }
 }
 
@@ -29,3 +34,7 @@ export async function disconnectDB(): Promise<void> {
 }
 
 export default mongoose;
+
+export function isDbConnected(): boolean {
+  return mongoose.connection.readyState === 1;
+}

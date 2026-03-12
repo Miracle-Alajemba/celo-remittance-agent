@@ -71,7 +71,8 @@ export async function executeBlockchainTransfer(request: TransferRequest): Promi
     const walletAddress = await celoProvider.getWalletAddress();
 
     // Create contract instance
-    const contract = celoProvider.getContract(tokenAddress, ERC20_ABI);
+    const checksumAddress = ethers.getAddress(tokenAddress);
+    const contract = celoProvider.getContract(checksumAddress, ERC20_ABI);
 
     // Check sender balance
     const balance = await contract.balanceOf(walletAddress);
@@ -185,7 +186,10 @@ export async function verifyTransactionStatus(txHash: string): Promise<{
 /**
  * Get wallet balance for a specific currency
  */
-export async function getWalletBalance(currency: string): Promise<{
+export async function getWalletBalance(
+  currency: string,
+  walletAddress?: string
+): Promise<{
   balance: string;
   formatted: string;
   currency: string;
@@ -196,9 +200,9 @@ export async function getWalletBalance(currency: string): Promise<{
       return null;
     }
 
-    const walletAddress = await celoProvider.getWalletAddress();
-    const contract = celoProvider.getContract(tokenAddress, ERC20_ABI);
-    const balance = await contract.balanceOf(walletAddress);
+    const targetAddress = walletAddress || await celoProvider.getWalletAddress();
+    const contract = celoProvider.getContract(ethers.getAddress(tokenAddress), ERC20_ABI);
+    const balance = await contract.balanceOf(targetAddress);
     const decimals = await contract.decimals();
     const formatted = ethers.formatUnits(balance, decimals);
 
@@ -216,12 +220,21 @@ export async function getWalletBalance(currency: string): Promise<{
 /**
  * Get all wallet balances
  */
-export async function getAllWalletBalances(): Promise<{ [currency: string]: string }> {
+export async function getAllWalletBalances(walletAddress?: string): Promise<{ [currency: string]: string }> {
   const balances: { [currency: string]: string } = {};
+  const targetAddress = walletAddress || await celoProvider.getWalletAddress();
+
+  // Native CELO balance
+  try {
+    const celoBalance = await celoProvider.provider.getBalance(targetAddress);
+    balances['CELO'] = ethers.formatEther(celoBalance);
+  } catch (error) {
+    balances['CELO'] = '0';
+  }
 
   for (const [currency] of Object.entries(STABLECOIN_ADDRESSES)) {
     try {
-      const result = await getWalletBalance(currency);
+      const result = await getWalletBalance(currency, targetAddress);
       if (result) {
         balances[currency] = result.formatted;
       }

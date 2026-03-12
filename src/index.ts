@@ -7,6 +7,7 @@ import express from 'express';
 import cors from 'cors';
 import * as dotenv from 'dotenv';
 import path from 'path';
+import rateLimit from 'express-rate-limit';
 import { AgentOrchestrator } from './blockchain/agent/orchestrator';
 import { compareFees, formatFeeComparison } from './blockchain/agent/fee-comparator';
 import { findOptimalRoute } from './blockchain/agent/route-optimizer';
@@ -19,14 +20,31 @@ import { getX402Protocol } from './blockchain/agent/x402-payment';
 import { getSkillsFramework } from './blockchain/agent/celo-skills';
 import { getAgentScanner } from './blockchain/agent/agentscan';
 import { startTelegramBot } from './blockchain/agent/telegram-bot';
+import { connectDB, isDbConnected } from './database/connection';
+import { getTransactionsByUser, getScheduledTransfersByUser, clearAllDemoData } from './database/services';
+import { startSchedulerWorker } from './blockchain/agent/scheduler-worker';
+import { validateCoreConfig } from './config';
+import { startRateRefresher } from './blockchain/market/rates';
+import { resetTransactionHistory } from './blockchain/agent/transaction-history';
+import { resetScheduledTransfers } from './blockchain/agent/scheduler';
+import { resetUserProfiles } from './blockchain/agent/user-profile';
+import { OpenClawAdapter } from './blockchain/agent/openclaw-adapter';
 
 dotenv.config();
+validateCoreConfig();
+startRateRefresher();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+
 // ==================== Utility Functions ====================
 
+function parsePositiveAmount(value: any): number | null {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return num;
+}
 
 
 // Middleware
@@ -34,8 +52,25 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Create agent instance
-const agent = new AgentOrchestrator();
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/', apiLimiter);
+
+// Create agent instance after DB init
+let agent: AgentOrchestrator | null = null;
+let openClaw: OpenClawAdapter | null = null;
+
+function getAgentOrRespond(res: express.Response): AgentOrchestrator | null {
+  if (!agent) {
+    res.status(503).json({ error: 'Agent not ready' });
+    return null;
+  }
+  return agent;
+}
 
 // ==================== Dashboard Route ====================
 
@@ -60,7 +95,14 @@ app.post('/api/chat', async (req: express.Request, res: express.Response) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    const response = await agent.processMessage(message);
+    const activeAgent = getAgentOrRespond(res);
+    if (!activeAgent) return;
+    if (!openClaw && process.env.USE_OPENCLAW_ADAPTER === 'true') {
+      openClaw = new OpenClawAdapter(activeAgent);
+    }
+    const response = openClaw
+      ? await openClaw.process(message)
+      : await activeAgent.processMessage(message);
     return res.json(response);
   } catch (error: any) {
     console.error('Chat error:', error);
@@ -81,7 +123,12 @@ app.post('/api/fees/compare', async (req: express.Request, res: express.Response
       return res.status(400).json({ error: 'amount, sendCurrency, and receiveCountry are required' });
     }
 
-    const comparison = compareFees(parseFloat(amount), sendCurrency, receiveCountry);
+    const parsedAmount = parsePositiveAmount(amount);
+    if (!parsedAmount) {
+      return res.status(400).json({ error: 'amount must be a positive number' });
+    }
+
+    const comparison = compareFees(parsedAmount, sendCurrency, receiveCountry);
     return res.json(comparison);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -101,7 +148,12 @@ app.post('/api/routes/optimize', async (req: express.Request, res: express.Respo
       return res.status(400).json({ error: 'sourceCurrency, targetCurrency, and amount are required' });
     }
 
-    const routes = findOptimalRoute(sourceCurrency, targetCurrency, parseFloat(amount));
+    const parsedAmount = parsePositiveAmount(amount);
+    if (!parsedAmount) {
+      return res.status(400).json({ error: 'amount must be a positive number' });
+    }
+
+    const routes = findOptimalRoute(sourceCurrency, targetCurrency, parsedAmount);
     return res.json({ routes });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -121,7 +173,12 @@ app.post('/api/swap/quote', async (req: express.Request, res: express.Response) 
       return res.status(400).json({ error: 'inputCurrency, outputCurrency, and inputAmount are required' });
     }
 
-    const quote = await getSwapQuote(inputCurrency, outputCurrency, inputAmount);
+    const parsedAmount = parsePositiveAmount(inputAmount);
+    if (!parsedAmount) {
+      return res.status(400).json({ error: 'inputAmount must be a positive number' });
+    }
+
+    const quote = await getSwapQuote(inputCurrency, outputCurrency, parsedAmount.toString());
     return res.json(quote);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -178,6 +235,32 @@ app.get('/api/blockchain/verify/:txHash', async (req: express.Request, res: expr
 app.get('/api/transactions', (_req: express.Request, res: express.Response) => {
   try {
     const limit = parseInt(_req.query.limit as string) || 10;
+    const userId = (_req.query.userId as string) || 'default_user';
+
+    if (isDbConnected()) {
+      return getTransactionsByUser(userId, limit)
+        .then((history) => {
+          const totalSent = history.reduce((sum, t) => sum + (t.sendAmount || 0), 0);
+          const totalFeesPaid = history.reduce((sum, t) => sum + (t.swapFee || 0) + (t.networkFee || 0), 0);
+          const uniqueRecipients = new Set(history.map((t) => t.recipientAddress)).size;
+          const corridors: { [key: string]: number } = {};
+          history.forEach((t) => {
+            const corridor = `${t.sendCurrency}→${t.receiveCurrency}`;
+            corridors[corridor] = (corridors[corridor] || 0) + 1;
+          });
+          const mostFrequent = Object.entries(corridors).sort((a, b) => b[1] - a[1])[0];
+          const summary = {
+            totalSent: Math.round(totalSent * 100) / 100,
+            totalTransactions: history.length,
+            uniqueRecipients,
+            totalFeesPaid: Math.round(totalFeesPaid * 100) / 100,
+            mostFrequentCorridor: mostFrequent ? mostFrequent[0] : 'N/A',
+          };
+          return res.json({ history, summary });
+        })
+        .catch((error: any) => res.status(500).json({ error: error.message }));
+    }
+
     const history = getTransactionHistory(limit);
     const summary = getTransactionSummary();
     return res.json({ history, summary });
@@ -195,6 +278,17 @@ app.get('/api/transactions', (_req: express.Request, res: express.Response) => {
 app.get('/api/schedules', (_req: express.Request, res: express.Response) => {
   try {
     const status = _req.query.status as string;
+    const userId = (_req.query.userId as string) || 'default_user';
+
+    if (isDbConnected()) {
+      return getScheduledTransfersByUser(userId, status)
+        .then((schedules) => {
+          const stats = getSchedulerStats();
+          return res.json({ schedules, stats });
+        })
+        .catch((error: any) => res.status(500).json({ error: error.message }));
+    }
+
     const schedules = getScheduledTransfers(status);
     const stats = getSchedulerStats();
     return res.json({ schedules, stats });
@@ -210,7 +304,9 @@ app.get('/api/schedules', (_req: express.Request, res: express.Response) => {
  * Get conversation history
  */
 app.get('/api/agent/memory', (_req: express.Request, res: express.Response) => {
-  const memory = agent.getMemory();
+  const activeAgent = getAgentOrRespond(res);
+  if (!activeAgent) return;
+  const memory = activeAgent.getMemory();
   return res.json({
     history: memory.getRecentHistory(20),
     profile: memory.getUserProfile(),
@@ -222,7 +318,9 @@ app.get('/api/agent/memory', (_req: express.Request, res: express.Response) => {
  * Reset agent memory
  */
 app.post('/api/agent/reset', (_req: express.Request, res: express.Response) => {
-  agent.clearMemory();
+  const activeAgent = getAgentOrRespond(res);
+  if (!activeAgent) return;
+  activeAgent.clearMemory();
   return res.json({ message: 'Memory cleared' });
 });
 
@@ -231,8 +329,11 @@ app.post('/api/agent/reset', (_req: express.Request, res: express.Response) => {
  * Get user spending summary and limits
  */
 app.get('/api/spending/summary', (_req: express.Request, res: express.Response) => {
-  const summary = agent.getSpendingSummary();
-  return res.json(summary);
+  const activeAgent = getAgentOrRespond(res);
+  if (!activeAgent) return;
+  activeAgent.getSpendingSummary()
+    .then((summary) => res.json(summary))
+    .catch((error) => res.status(500).json({ error: error.message }));
 });
 
 // ==================== Health Check ====================
@@ -244,6 +345,37 @@ app.get('/api/health', (_req: express.Request, res: express.Response) => {
     version: '1.0.0',
     timestamp: new Date().toISOString(),
   });
+});
+
+// ==================== Demo API ====================
+
+/**
+ * POST /api/demo/reset
+ * Clear demo data (requires DEMO_KEY)
+ */
+app.post('/api/demo/reset', async (req: express.Request, res: express.Response) => {
+  const demoKey = process.env.DEMO_KEY;
+  const provided = req.header('X-DEMO-KEY') || req.body?.demoKey;
+  if (!demoKey || provided !== demoKey) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    if (agent) {
+      agent.clearMemory();
+    }
+    resetTransactionHistory();
+    resetScheduledTransfers();
+    resetUserProfiles();
+
+    if (isDbConnected()) {
+      await clearAllDemoData();
+    }
+
+    return res.json({ ok: true });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 // ==================== ERC-8004 Wallet API ====================
@@ -586,7 +718,11 @@ app.get('*', (_req: express.Request, res: express.Response) => {
 });
 
 // Start server
-const server = app.listen(PORT, async () => {
+async function startServer() {
+  await connectDB();
+  agent = new AgentOrchestrator();
+
+  const server = app.listen(PORT, async () => {
   console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║   🌍 Celo Remittance Agent - Telegram Bot Server         ║
@@ -612,10 +748,21 @@ const server = app.listen(PORT, async () => {
   // Initialize Telegram Bot
   try {
     const telegramBot = await startTelegramBot();
-    console.log('✅ Telegram Bot initialized and polling for messages');
+    if (telegramBot) {
+      console.log('✅ Telegram Bot initialized and polling for messages');
+    }
   } catch (error) {
     console.error('⚠️ Telegram Bot initialization failed:', error);
   }
+
+  // Start scheduler worker if DB is available
+  startSchedulerWorker();
+});
+}
+
+startServer().catch((error) => {
+  console.error('Server failed to start:', error);
+  process.exit(1);
 });
 
 export default app;

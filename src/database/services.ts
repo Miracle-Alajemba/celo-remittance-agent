@@ -2,8 +2,8 @@
  * Database Service Functions
  */
 
-import { User, Transaction, ScheduledTransfer } from './models';
-import { IUser, ITransaction, IScheduledTransfer } from './models';
+import { User, Transaction, ScheduledTransfer, ConversationMessage } from './models';
+import { IUser, ITransaction, IScheduledTransfer, IConversationMessage } from './models';
 
 // ==================== User Services ====================
 
@@ -163,6 +163,35 @@ export async function insertScheduledTransferExecution(
     },
     { new: true }
   );
+}
+
+// ==================== Conversation Services ====================
+
+export async function createConversationMessage(
+  data: Partial<IConversationMessage>
+): Promise<IConversationMessage> {
+  return ConversationMessage.create(data);
+}
+
+export async function getConversationHistory(
+  userId: string,
+  limit: number = 50
+): Promise<IConversationMessage[]> {
+  return ConversationMessage.find({ userId })
+    .sort({ timestamp: -1 })
+    .limit(limit)
+    .exec();
+}
+
+// ==================== Demo Helpers ====================
+
+export async function clearAllDemoData(): Promise<void> {
+  await Promise.all([
+    User.deleteMany({}),
+    Transaction.deleteMany({}),
+    ScheduledTransfer.deleteMany({}),
+    ConversationMessage.deleteMany({}),
+  ]);
 }
 
 function calculateNextExecutionDate(currentDate: Date, frequency: string): Date {

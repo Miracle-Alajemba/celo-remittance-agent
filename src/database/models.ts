@@ -88,6 +88,25 @@ const transactionSchema = new Schema<ITransaction>({
   updatedAt: { type: Date, default: Date.now },
 });
 
+// Conversation Message Schema
+export interface IConversationMessage extends Document {
+  userId: string;
+  role: 'user' | 'agent';
+  content: string;
+  timestamp: Date;
+  intent?: any;
+  metadata?: any;
+}
+
+const conversationMessageSchema = new Schema<IConversationMessage>({
+  userId: { type: String, required: true, index: true },
+  role: { type: String, required: true, enum: ['user', 'agent'] },
+  content: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now, index: true },
+  intent: { type: Schema.Types.Mixed },
+  metadata: { type: Schema.Types.Mixed },
+});
+
 // Scheduled Transfer Schema
 export interface IScheduledTransfer extends Document {
   userId: string;
@@ -130,10 +149,11 @@ const scheduledTransferSchema = new Schema<IScheduledTransfer>({
 });
 
 // Create indexes for better query performance
-userSchema.index({ userId: 1 });
 transactionSchema.index({ userId: 1, createdAt: -1 });
 scheduledTransferSchema.index({ userId: 1, status: 1 });
+conversationMessageSchema.index({ userId: 1, timestamp: -1 });
 
 export const User = mongoose.model<IUser>('User', userSchema);
 export const Transaction = mongoose.model<ITransaction>('Transaction', transactionSchema);
+export const ConversationMessage = mongoose.model<IConversationMessage>('ConversationMessage', conversationMessageSchema);
 export const ScheduledTransfer = mongoose.model<IScheduledTransfer>('ScheduledTransfer', scheduledTransferSchema);

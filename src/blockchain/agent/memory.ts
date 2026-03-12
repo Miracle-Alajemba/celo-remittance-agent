@@ -2,6 +2,9 @@
  * Enhanced Conversation Memory with persistent-like storage
  */
 
+import { isDbConnected } from '../../database/connection';
+import { createConversationMessage, getConversationHistory } from '../../database/services';
+
 export interface ConversationMessage {
   id: string;
   role: 'user' | 'agent';
@@ -19,6 +22,7 @@ export interface UserProfile {
   country?: string;
   preferredCurrency?: string;
   preferredLanguage?: string;
+  walletAddress?: string;
   frequentRecipients: FrequentRecipient[];
   spendingLimit: {
     daily: number;
@@ -47,8 +51,10 @@ export interface AgentMemory {
 
 export class ConversationMemory {
   private memory: AgentMemory;
+  private userId?: string;
 
-  constructor() {
+  constructor(userId?: string) {
+    this.userId = userId;
     this.memory = {
       conversationHistory: [],
       userProfile: {
@@ -65,20 +71,54 @@ export class ConversationMemory {
     };
   }
 
+  async init(): Promise<void> {
+    if (!this.userId || !isDbConnected()) return;
+    try {
+      const history = await getConversationHistory(this.userId, 50);
+      this.memory.conversationHistory = history
+        .slice()
+        .reverse()
+        .map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp,
+          intent: m.intent,
+          metadata: m.metadata,
+        }));
+    } catch (error) {
+      console.warn('[Memory] Failed to load conversation history:', error);
+    }
+  }
+
   addMessage(role: 'user' | 'agent', content: string, intent?: any, metadata?: any): string {
     const id = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    this.memory.conversationHistory.push({
+    const message: ConversationMessage = {
       id,
       role,
       content,
       timestamp: new Date(),
       intent,
       metadata,
-    });
+    };
+    this.memory.conversationHistory.push(message);
 
     // Keep last 50 messages
     if (this.memory.conversationHistory.length > 50) {
       this.memory.conversationHistory = this.memory.conversationHistory.slice(-50);
+    }
+
+    if (this.userId && isDbConnected()) {
+      void createConversationMessage({
+        userId: this.userId,
+        role,
+        content,
+        timestamp: message.timestamp,
+        intent,
+        metadata,
+      }).catch((error) => {
+        console.warn('[Memory] Failed to persist message:', error);
+      });
     }
 
     return id;
