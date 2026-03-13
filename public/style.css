@@ -897,6 +897,60 @@ body {
   overflow-y: auto;
 }
 
+.swap-toolbar {
+  margin-top: 12px;
+}
+
+.ghost-btn {
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.ghost-btn:hover {
+  border-color: rgba(53, 208, 127, 0.5);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-glow);
+  transform: translateY(-1px);
+}
+
+.swap-balances {
+  padding: 0 32px 16px;
+}
+
+.balance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.balance-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+}
+
+.balance-label {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.balance-value {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-top: 6px;
+}
+
 .swap-results {
   padding: 0 32px 32px;
 }

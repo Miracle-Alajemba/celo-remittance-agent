@@ -20,6 +20,8 @@ const sidebar = document.getElementById('sidebar');
 const mobileMenuBtn = document.getElementById('mobileMenuBtn');
 const compareBtn = document.getElementById('compareBtn');
 const swapSendBtn = document.getElementById('swapSendBtn');
+const swapQuickFillBtn = document.getElementById('swapQuickFillBtn');
+const swapRefreshBalancesBtn = document.getElementById('swapRefreshBalancesBtn');
 
 // ==================== Navigation ====================
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -43,6 +45,7 @@ function switchView(viewName) {
   // Load data for non-chat views
   if (viewName === 'dashboard') loadDashboard();
   if (viewName === 'history') loadHistory();
+  if (viewName === 'swap') loadSwapBalances();
 
   // Close mobile sidebar
   sidebar.classList.remove('mobile-open');
@@ -581,6 +584,11 @@ if (swapSendBtn) {
           message: 'Swap and send completed',
           details: { ...baseDetails, ...data },
         });
+        localStorage.setItem('swapLastRecipient', recipient);
+        localStorage.setItem('swapLastInput', inputCurrency);
+        localStorage.setItem('swapLastOutput', outputCurrency);
+        localStorage.setItem('swapLastAmount', inputAmount);
+        loadSwapBalances();
       }
     } catch (error) {
       renderSwapResult({
@@ -592,6 +600,60 @@ if (swapSendBtn) {
       swapSendBtn.disabled = false;
     }
   });
+}
+
+if (swapQuickFillBtn) {
+  swapQuickFillBtn.addEventListener('click', () => {
+    const recipientEl = document.getElementById('swapRecipient');
+    const amountEl = document.getElementById('swapInputAmount');
+    const inputEl = document.getElementById('swapInputCurrency');
+    const outputEl = document.getElementById('swapOutputCurrency');
+
+    const lastRecipient = localStorage.getItem('swapLastRecipient');
+    if (recipientEl && !recipientEl.value && lastRecipient) recipientEl.value = lastRecipient;
+
+    if (amountEl) amountEl.value = localStorage.getItem('swapLastAmount') || '5';
+    if (inputEl) inputEl.value = localStorage.getItem('swapLastInput') || 'cUSD';
+    if (outputEl) outputEl.value = localStorage.getItem('swapLastOutput') || 'cEUR';
+  });
+}
+
+if (swapRefreshBalancesBtn) {
+  swapRefreshBalancesBtn.addEventListener('click', () => {
+    loadSwapBalances();
+  });
+}
+
+async function loadSwapBalances() {
+  const container = document.getElementById('swapBalances');
+  if (!container) return;
+
+  container.innerHTML = '<p class="empty-state">Loading balances...</p>';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/blockchain/balance`);
+    const data = await res.json();
+    const balances = data.balances || {};
+    const entries = Object.entries(balances);
+
+    if (entries.length === 0) {
+      container.innerHTML = '<p class="empty-state">No balances available</p>';
+      return;
+    }
+
+    let html = '<div class="balance-grid">';
+    for (const [symbol, value] of entries) {
+      html += `
+        <div class="balance-card">
+          <div class="balance-label">${symbol}</div>
+          <div class="balance-value">${Number(value).toLocaleString()}</div>
+        </div>`;
+    }
+    html += '</div>';
+    container.innerHTML = html;
+  } catch (error) {
+    container.innerHTML = '<p class="empty-state">❌ Failed to load balances</p>';
+  }
 }
 
 function renderSwapResult(payload) {

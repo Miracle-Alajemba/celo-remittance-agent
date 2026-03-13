@@ -307,11 +307,25 @@
               <label for="swapSlippage">Max Slippage</label>
               <input type="number" id="swapSlippage" value="0.01" min="0" step="0.001">
             </div>
+            <button class="ghost-btn" id="swapPreviewBtn" type="button">Preview Swap</button>
             <button class="compare-btn" id="swapSendBtn">Swap & Send</button>
           </div>
+          <div class="form-row swap-toolbar">
+            <button class="ghost-btn" id="swapQuickFillBtn" type="button">Use Demo Values</button>
+            <button class="ghost-btn" id="swapRefreshBalancesBtn" type="button">Refresh Balances</button>
+          </div>
+        </div>
+        <div class="swap-preview" id="swapPreview">
+          <p class="empty-state">Preview will appear here</p>
+        </div>
+        <div class="swap-balances" id="swapBalances">
+          <p class="empty-state">Balances will appear here after refresh</p>
         </div>
         <div class="swap-results" id="swapResults">
           <p class="empty-state">Enter details and click Swap & Send to execute a testnet transfer</p>
+        </div>
+        <div class="swap-history" id="swapHistory">
+          <p class="empty-state">Swap & send activity will appear here</p>
         </div>
       </div>
 
