@@ -110,6 +110,7 @@ const CURRENCY_KEYWORDS: { [key: string]: string } = {
   'shilling': 'KES', 'shillings': 'KES', 'kes': 'KES',
   'real': 'BRL', 'reais': 'BRL', 'brl': 'BRL',
   'franc': 'XOF', 'francs': 'XOF', 'cfa': 'XOF', 'xof': 'XOF',
+  'celo': 'CELO', 'celos': 'CELO', 'cgld': 'CELO',
 };
 
 const RELATIONSHIP_KEYWORDS: { [lang: string]: string[] } = {

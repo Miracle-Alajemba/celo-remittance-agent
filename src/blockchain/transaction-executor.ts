@@ -58,11 +58,71 @@ export async function executeBlockchainTransfer(request: TransferRequest): Promi
       };
     }
 
-    const tokenAddress = STABLECOIN_ADDRESSES[request.currency];
+    const currencyInput = (request.currency || '').trim();
+    const currencyLower = currencyInput.toLowerCase();
+
+    // Native CELO transfer
+    if (currencyLower === 'celo' || currencyLower === 'cgld') {
+      const walletAddress = await celoProvider.getWalletAddress();
+      const balance = await celoProvider.provider.getBalance(walletAddress);
+      const amountToSend = ethers.parseEther(request.amount);
+
+      if (balance < amountToSend) {
+        const balanceFormatted = ethers.formatEther(balance);
+        return {
+          success: false,
+          error: `Insufficient balance. Available: ${balanceFormatted} CELO, Required: ${request.amount}`,
+          status: 'failed',
+        };
+      }
+
+      const tx = await celoProvider.wallet.sendTransaction({
+        to: request.recipient,
+        value: amountToSend,
+      });
+
+      let timeoutId: NodeJS.Timeout;
+      const timeoutPromise = new Promise<null>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Transaction confirmation timeout')), 60000);
+      });
+
+      const receipt = await Promise.race([
+        tx.wait().finally(() => clearTimeout(timeoutId)),
+        timeoutPromise
+      ]);
+
+      if (!receipt) {
+        return {
+          success: false,
+          txHash: tx.hash,
+          error: 'Transaction receipt is null',
+          status: 'pending',
+        };
+      }
+
+      const isSuccess = receipt.status === 1;
+      return {
+        success: isSuccess,
+        txHash: tx.hash,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed?.toString(),
+        status: isSuccess ? 'confirmed' : 'failed',
+        error: isSuccess ? undefined : 'Transaction failed on blockchain',
+      };
+    }
+
+    const tokenAddress =
+      STABLECOIN_ADDRESSES[currencyInput] ||
+      STABLECOIN_ADDRESSES[currencyInput.toUpperCase()] ||
+      STABLECOIN_ADDRESSES[
+        Object.keys(STABLECOIN_ADDRESSES).find(
+          (k) => k.toLowerCase() === currencyLower
+        ) || ''
+      ];
     if (!tokenAddress) {
       return {
         success: false,
-        error: `Unsupported currency: ${request.currency}. Supported: ${Object.keys(STABLECOIN_ADDRESSES).join(', ')}`,
+        error: `Unsupported currency: ${request.currency}. Supported: CELO, ${Object.keys(STABLECOIN_ADDRESSES).join(', ')}`,
         status: 'failed',
       };
     }
