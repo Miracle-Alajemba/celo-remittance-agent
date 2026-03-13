@@ -6,14 +6,17 @@
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test:send-celo": "ts-node scripts/test-send-celo.ts"
   },
   "dependencies": {
+    "@mento-protocol/mento-sdk": "^1.10.3",
     "@anthropic-ai/sdk": "^0.20.0",
     "axios": "^1.6.0",
     "cors": "^2.8.6",
     "dotenv": "^16.3.1",
     "ethers": "^6.9.0",
+    "ethers5": "npm:ethers@^5.7.2",
     "express": "^4.22.1",
     "express-rate-limit": "^7.4.0",
     "mongoose": "^8.0.0",

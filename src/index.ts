@@ -153,7 +153,7 @@ app.post('/api/routes/optimize', async (req: express.Request, res: express.Respo
       return res.status(400).json({ error: 'amount must be a positive number' });
     }
 
-    const routes = findOptimalRoute(sourceCurrency, targetCurrency, parsedAmount);
+    const routes = await findOptimalRoute(sourceCurrency, targetCurrency, parsedAmount);
     return res.json({ routes });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -189,8 +189,13 @@ app.post('/api/swap/quote', async (req: express.Request, res: express.Response) 
  * GET /api/swap/pairs
  * Get supported swap pairs
  */
-app.get('/api/swap/pairs', (_req: express.Request, res: express.Response) => {
-  return res.json({ pairs: getSupportedPairs() });
+app.get('/api/swap/pairs', async (_req: express.Request, res: express.Response) => {
+  try {
+    const pairs = await getSupportedPairs();
+    return res.json({ pairs });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 // ==================== Blockchain API ====================

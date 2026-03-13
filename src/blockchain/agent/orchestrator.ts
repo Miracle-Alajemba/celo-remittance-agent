@@ -29,6 +29,8 @@ import {
 import { enhanceIntentWithLLM } from './llm-service';
 import { getOrCreateUser, checkSpendingLimit, recordSpending, getSpendingSummary, getUser, updateUserProfile } from './user-profile';
 import { executeBlockchainTransfer, getAllWalletBalances } from '../transaction-executor'; // 👈 IMPORT ADDED HERE
+import { executeSwap } from '../mento/mento-integration';
+import { resolveTokenBySymbol } from '../mento/mento-client';
 import { getAgentWallet, ERC8004Wallet } from './erc8004-wallet';
 import { getX402Protocol, X402PaymentProtocol } from './x402-payment';
 import { getSkillsFramework, CeloSkillsFramework } from './celo-skills';
@@ -365,7 +367,7 @@ export class AgentOrchestrator {
     // Find optimal route
     const sourceCurrency = intent.sourceCurrency || 'USD';
     const targetCurrency = intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry);
-    const routes = findOptimalRoute(sourceCurrency, targetCurrency, amount);
+    const routes = await findOptimalRoute(sourceCurrency, targetCurrency, amount);
     const bestRoute = routes[0];
 
     if (!bestRoute) {
@@ -475,6 +477,7 @@ export class AgentOrchestrator {
       const route = pending.route;
       const recipientAddress = intent.recipientAddress || process.env.RECIPIENT_ADDRESS || '0x1234567890123456789012345678901234567890';
       const sourceCurrency = intent.sourceCurrency || 'USD';
+      const targetCurrency = intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry || '');
 
       // Map real-world currency to Celo Blockchain Token names
       const tokenMap: {[key: string]: string } = {
@@ -485,12 +488,34 @@ export class AgentOrchestrator {
         'XOF': 'XOFm'   // Map XOF to Mento CFA
       };
       const blockchainToken = tokenMap[sourceCurrency] || sourceCurrency;
+      const targetToken = tokenMap[targetCurrency] || targetCurrency;
+
+      let transferAmount = intent.amount || '0';
+      let transferCurrency = blockchainToken;
+
+      // If both currencies exist on-chain, swap via Mento before transfer
+      const canSwap =
+        blockchainToken.toLowerCase() !== targetToken.toLowerCase() &&
+        (await resolveTokenBySymbol(blockchainToken)) &&
+        (await resolveTokenBySymbol(targetToken));
+
+      if (canSwap) {
+        const maxSlippage = Number(process.env.MENTO_MAX_SLIPPAGE || 0.01);
+        const swapResult = await executeSwap(blockchainToken, targetToken, transferAmount, maxSlippage);
+        if (!swapResult.success) {
+          const errorMsg = responses['transfer_failed'].replace('{error}', swapResult.error || 'Swap failed');
+          this.pendingConfirmation = null;
+          return this.createResponse(errorMsg, 'error', lang, ['Try again', 'Check balance']);
+        }
+        transferAmount = swapResult.outputAmount;
+        transferCurrency = targetToken;
+      }
 
       // Execute blockchain transfer
       const executionResult = await executeBlockchainTransfer({
         recipient: recipientAddress,
-        amount: intent.amount || '0',
-        currency: blockchainToken,
+        amount: transferAmount,
+        currency: transferCurrency,
         recipientName: intent.recipientName || 'Recipient',
         recipientCountry: intent.recipientCountry || '',
       });
@@ -504,9 +529,11 @@ export class AgentOrchestrator {
         recipientCountry: intent.recipientCountry,
         sendAmount: parseFloat(intent.amount || '0'),
         sendCurrency: sourceCurrency,
-        receiveAmount: route.estimatedOutput,
-        receiveCurrency: intent.targetCurrency || 'USD',
-        exchangeRate: route.path[0].rate,
+        receiveAmount: canSwap ? parseFloat(transferAmount) : route.estimatedOutput,
+        receiveCurrency: canSwap ? targetToken : targetCurrency,
+        exchangeRate: canSwap && parseFloat(intent.amount || '0') > 0
+          ? parseFloat(transferAmount) / parseFloat(intent.amount || '0')
+          : route.path[0].rate,
         networkFee: 0.001,
         swapFee: route.totalFeeUSD,
         txHash: executionResult.txHash || `0x${Math.random().toString(16).substring(2)}${Math.random().toString(16).substring(2)}`.substring(0, 66),
@@ -525,9 +552,11 @@ export class AgentOrchestrator {
             recipientCountry: intent.recipientCountry || '',
             sendAmount: parseFloat(intent.amount || '0'),
             sendCurrency: sourceCurrency,
-            receiveAmount: route.estimatedOutput,
-            receiveCurrency: intent.targetCurrency || 'USD',
-            exchangeRate: route.path[0].rate,
+            receiveAmount: canSwap ? parseFloat(transferAmount) : route.estimatedOutput,
+            receiveCurrency: canSwap ? targetToken : targetCurrency,
+            exchangeRate: canSwap && parseFloat(intent.amount || '0') > 0
+              ? parseFloat(transferAmount) / parseFloat(intent.amount || '0')
+              : route.path[0].rate,
             networkFee: 0.001,
             swapFee: route.totalFeeUSD,
             txHash: executionResult.txHash || txRecord.blockchain.txHash || '',

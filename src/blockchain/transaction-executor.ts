@@ -5,6 +5,7 @@
 
 import { ethers } from 'ethers';
 import { celoProvider } from './celo/celo-provider';
+import { getStablecoinAddress as getMentoStablecoinAddress } from './mento/mento-integration';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -28,13 +29,36 @@ export interface TransferRequest {
 
 const STABLECOIN_ADDRESSES: { [symbol: string]: string } = {
   USDm: '0x520b294f93c80aE2d195763E42645cD82F70e1e8',
-  EUR: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
+  EURm: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
   BRLm: '0x25F93d1a8F4d2C3b3F4cBf55f5B8E97C3E9fA3BB',
   COPm: '0x3F2D6B2E4cD3f5a6B7c8D9e0F1A2B3C4D5E6F7A8',
   XOFm: '0x4A3B5C6D7E8F9A0B1C2D3E4F5A6B7C8D9E0F1A2B',
   cUSD: '0x874069Fa1Eb16D44d622F2e0Ca25eeA172369bC1',
   cEUR: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
+  cREAL: '0xE4D517785D091D3c54818832dB6094bcc2744545',
 };
+
+const SYMBOL_ALIASES: { [symbol: string]: string } = {
+  USD: 'cUSD',
+  EUR: 'cEUR',
+  BRL: 'BRLm',
+  COP: 'COPm',
+  XOF: 'XOFm',
+};
+
+async function resolveTokenAddress(symbol: string): Promise<string | null> {
+  const normalized = SYMBOL_ALIASES[symbol] || symbol;
+  const direct =
+    STABLECOIN_ADDRESSES[normalized] ||
+    STABLECOIN_ADDRESSES[normalized.toUpperCase()];
+  if (direct) return direct;
+
+  try {
+    return await getMentoStablecoinAddress(normalized);
+  } catch {
+    return null;
+  }
+}
 
 const ERC20_ABI = [
   'function transfer(address to, uint256 amount) public returns (bool)',
@@ -111,14 +135,7 @@ export async function executeBlockchainTransfer(request: TransferRequest): Promi
       };
     }
 
-    const tokenAddress =
-      STABLECOIN_ADDRESSES[currencyInput] ||
-      STABLECOIN_ADDRESSES[currencyInput.toUpperCase()] ||
-      STABLECOIN_ADDRESSES[
-        Object.keys(STABLECOIN_ADDRESSES).find(
-          (k) => k.toLowerCase() === currencyLower
-        ) || ''
-      ];
+    const tokenAddress = await resolveTokenAddress(currencyInput);
     if (!tokenAddress) {
       return {
         success: false,
@@ -255,7 +272,7 @@ export async function getWalletBalance(
   currency: string;
 } | null> {
   try {
-    const tokenAddress = STABLECOIN_ADDRESSES[currency];
+    const tokenAddress = await resolveTokenAddress(currency);
     if (!tokenAddress) {
       return null;
     }

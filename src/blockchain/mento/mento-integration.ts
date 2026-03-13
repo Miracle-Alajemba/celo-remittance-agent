@@ -1,24 +1,18 @@
 /**
  * Enhanced Mento Protocol Integration
- * Multi-currency swaps on Celo
+ * Real on-chain quotes and swaps via Mento SDK
  */
 
-import { ethers } from 'ethers';
-import { celoProvider } from '../celo/celo-provider';
-import { getRate as getFxRate, getSupportedPairs as getSupportedRatePairs } from '../market/rates';
-
-// Celo Stablecoin addresses (Alfajores Testnet)
-export const STABLECOIN_ADDRESSES: { [symbol: string]: string } = {
-  USDm: '0x520b294f93c80aE2d195763E42645cD82F70e1e8',
-  EURm: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
-  BRLm: '0x25F93d1a8F4d2C3b3F4cBf55f5B8E97C3E9fA3BB',
-  COPm: '0x3F2D6B2E4cD3f5a6B7c8D9e0F1A2B3C4D5E6F7A8',
-  XOFm: '0x4A3B5C6D7E8F9A0B1C2D3E4F5A6B7C8D9E0F1A2B',
-  cUSD: '0x874069Fa1Eb16D44d622F2e0Ca25eeA172369bC1',
-  cEUR: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
-  cREAL: '0xE4D517785D091D3c54818832dB6094bcc2744545',
-  CELO: '0xF194afDf50B03e69Bd7D057c1Aa9e10c9954E4C9',
-};
+import { utils } from 'ethers5';
+import { getRate as getFxRate } from '../market/rates';
+import {
+  getReadOnlyMento,
+  getSignerMento,
+  getTokenDecimals,
+  getTradeablePairs,
+  resolveTokenBySymbol,
+  TokenInfo,
+} from './mento-client';
 
 export interface SwapQuote {
   inputAmount: string;
@@ -42,32 +36,105 @@ export interface SwapResult {
   error?: string;
 }
 
+const DEFAULT_SLIPPAGE = Number(process.env.MENTO_DEFAULT_SLIPPAGE || 0.005);
+
+function toFiatSymbol(symbol: string): string {
+  const lower = symbol.toLowerCase();
+  const map: { [k: string]: string } = {
+    cusd: 'USD',
+    usdm: 'USD',
+    usd: 'USD',
+    ceur: 'EUR',
+    eurm: 'EUR',
+    eur: 'EUR',
+    brlm: 'BRL',
+    creal: 'BRL',
+    brl: 'BRL',
+    copm: 'COP',
+    cop: 'COP',
+    xofm: 'XOF',
+    xof: 'XOF',
+    ghsm: 'GHS',
+    ghs: 'GHS',
+    kesm: 'KES',
+    kes: 'KES',
+    ngnm: 'NGN',
+    ngn: 'NGN',
+    inrm: 'INR',
+    inr: 'INR',
+    mxnm: 'MXN',
+    mxn: 'MXN',
+    celo: 'CELO',
+  };
+  return map[lower] || symbol.toUpperCase();
+}
+
+function computeFeeFromFx(
+  inputAmount: number,
+  outputAmount: number,
+  inputSymbol: string,
+  outputSymbol: string
+): { fee: number; feePercent: number; fxRate: number } {
+  const fiatIn = toFiatSymbol(inputSymbol);
+  const fiatOut = toFiatSymbol(outputSymbol);
+  const fxRate = getFxRate(fiatIn, fiatOut) || (inputAmount > 0 ? outputAmount / inputAmount : 0);
+  const expectedOut = inputAmount * fxRate;
+  const fee = Math.max(0, expectedOut - outputAmount);
+  const feePercent = expectedOut > 0 ? (fee / expectedOut) * 100 : 0;
+  return { fee, feePercent, fxRate };
+}
+
+async function resolvePair(
+  inputCurrency: string,
+  outputCurrency: string
+): Promise<{ tokenIn: TokenInfo; tokenOut: TokenInfo }> {
+  const tokenIn = await resolveTokenBySymbol(inputCurrency);
+  const tokenOut = await resolveTokenBySymbol(outputCurrency);
+  if (!tokenIn || !tokenOut) {
+    throw new Error(`Unsupported swap pair: ${inputCurrency} -> ${outputCurrency}`);
+  }
+  return { tokenIn, tokenOut };
+}
+
 export async function getSwapQuote(
   inputCurrency: string,
   outputCurrency: string,
   inputAmount: string
 ): Promise<SwapQuote> {
   try {
-    const rate = getFxRate(inputCurrency, outputCurrency) || 1;
-    const amount = parseFloat(inputAmount);
+    const { tokenIn, tokenOut } = await resolvePair(inputCurrency, outputCurrency);
+    const amount = Number(inputAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error(`Invalid input amount: ${inputAmount}`);
+    }
 
-    // Mento fee: 0.25-0.30%
-    const feePercent = 0.25;
-    const fee = amount * (feePercent / 100);
-    const slippage = 0.005; // 0.5%
-    const outputAmount = ((amount - fee) * rate * (1 - slippage)).toFixed(2);
+    const mento = await getReadOnlyMento();
+    const decimalsIn = await getTokenDecimals(tokenIn.address);
+    const decimalsOut = await getTokenDecimals(tokenOut.address);
+    const amountIn = utils.parseUnits(inputAmount, decimalsIn);
+    const amountOut = await mento.getAmountOut(tokenIn.address, tokenOut.address, amountIn);
+    const outputAmount = utils.formatUnits(amountOut, decimalsOut);
+
+    const outputNumeric = Number(outputAmount);
+    const rate = outputNumeric / amount;
+    const { fee, feePercent, fxRate } = computeFeeFromFx(
+      amount,
+      outputNumeric,
+      tokenIn.symbol,
+      tokenOut.symbol
+    );
 
     return {
       inputAmount,
       outputAmount,
-      inputCurrency,
-      outputCurrency,
-      rate,
-      slippage,
+      inputCurrency: tokenIn.symbol,
+      outputCurrency: tokenOut.symbol,
+      rate: fxRate || rate,
+      slippage: DEFAULT_SLIPPAGE,
       fee,
       feePercent,
       estimatedGas: '0.001',
-      route: `${inputCurrency} → ${outputCurrency} (Mento)`,
+      route: `${tokenIn.symbol} → ${tokenOut.symbol} (Mento)`,
     };
   } catch (error) {
     console.error('Swap quote error:', error);
@@ -83,16 +150,33 @@ export async function executeSwap(
 ): Promise<SwapResult> {
   try {
     const quote = await getSwapQuote(inputCurrency, outputCurrency, inputAmount);
+    const { tokenIn, tokenOut } = await resolvePair(inputCurrency, outputCurrency);
+    const { mento, signer } = await getSignerMento();
 
-    // In production, this would interact with Mento's Broker contract
-    // For now, we simulate the swap
-    console.log(`[Mento Swap] ${inputAmount} ${inputCurrency} → ${quote.outputAmount} ${outputCurrency}`);
+    const decimalsIn = await getTokenDecimals(tokenIn.address);
+    const decimalsOut = await getTokenDecimals(tokenOut.address);
+    const amountIn = utils.parseUnits(inputAmount, decimalsIn);
 
-    // Simulated transaction result
+    const expectedOut = utils.parseUnits(quote.outputAmount, decimalsOut);
+    const slippageBps = Math.max(0, Math.min(10000, Math.round(maxSlippage * 10000)));
+    const minAmountOut = expectedOut.mul(10000 - slippageBps).div(10000);
+
+    // Ensure allowance for Mento broker
+    await mento.increaseTradingAllowance(tokenIn.address, amountIn);
+
+    const swapTxObj = await mento.swapIn(
+      tokenIn.address,
+      tokenOut.address,
+      amountIn,
+      minAmountOut
+    );
+    const swapTx = await signer.sendTransaction(swapTxObj);
+    const receipt = await swapTx.wait();
+
     return {
-      success: true,
-      txHash: `0x${Math.random().toString(16).substring(2)}${Math.random().toString(16).substring(2)}`.substring(0, 66),
-      blockNumber: Math.floor(Math.random() * 1000000) + 20000000,
+      success: receipt.status === 1,
+      txHash: swapTx.hash,
+      blockNumber: receipt.blockNumber,
       inputAmount: quote.inputAmount,
       outputAmount: quote.outputAmount,
     };
@@ -107,20 +191,27 @@ export async function executeSwap(
 }
 
 export async function estimateSwapFee(inputAmount: string): Promise<number> {
-  // Mento fee: ~0.25% of input amount
-  return parseFloat(inputAmount) * 0.0025;
+  // Estimate via default fee percent when exact on-chain fee is unknown
+  return parseFloat(inputAmount) * 0.003;
 }
 
-export function getSupportedPairs(): string[] {
-  return getSupportedRatePairs();
+export async function getSupportedPairs(): Promise<string[]> {
+  const pairs = await getTradeablePairs();
+  return pairs.map(([a, b]) => `${a.symbol}-${b.symbol}`);
 }
 
-export function getRate(pair: string): number | null {
+export async function getRate(pair: string): Promise<number | null> {
   const [base, quote] = pair.split('-');
   if (!base || !quote) return null;
-  return getFxRate(base, quote);
+  try {
+    const result = await getSwapQuote(base, quote, '1');
+    return result.rate;
+  } catch {
+    return getFxRate(base, quote);
+  }
 }
 
-export function getStablecoinAddress(symbol: string): string | null {
-  return STABLECOIN_ADDRESSES[symbol] || null;
+export async function getStablecoinAddress(symbol: string): Promise<string | null> {
+  const token = await resolveTokenBySymbol(symbol);
+  return token?.address || null;
 }

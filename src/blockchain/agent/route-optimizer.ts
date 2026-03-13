@@ -1,9 +1,11 @@
 /**
  * Route Optimizer - Finds the cheapest transfer path across Mento pools
- * Supports multi-hop routes (e.g., USD → cUSD → cEUR → EUR)
+ * Uses on-chain Mento quotes when possible, falls back to FX estimates
  */
 
 import { getRate as getFxRate } from '../market/rates';
+import { getSwapQuote } from '../mento/mento-integration';
+import { getTradeablePairs, resolveTokenBySymbol, TokenInfo } from '../mento/mento-client';
 
 export interface TransferRoute {
   id: string;
@@ -24,145 +26,177 @@ export interface RouteHop {
   estimatedGas: string;
 }
 
-// Mento pool configurations on Celo
-const MENTO_POOLS: { [pair: string]: { rate: number; feePercent: number; liquidity: number } } = {
-  'USD-CELO': { rate: 0.85, feePercent: 0.25, liquidity: 5000000 },
-  'CELO-USD': { rate: 1.18, feePercent: 0.25, liquidity: 5000000 },
-  'EUR-CELO': { rate: 0.78, feePercent: 0.25, liquidity: 3000000 },
-  'CELO-EUR': { rate: 1.28, feePercent: 0.25, liquidity: 3000000 },
-  'BRL-CELO': { rate: 4.95, feePercent: 0.30, liquidity: 1000000 },
-  'CELO-BRL': { rate: 0.20, feePercent: 0.30, liquidity: 1000000 },
-  'USD-EUR': { rate: 0.92, feePercent: 0.15, liquidity: 10000000 },
-  'EUR-USD': { rate: 1.09, feePercent: 0.15, liquidity: 10000000 },
-  'USD-BRL': { rate: 5.10, feePercent: 0.20, liquidity: 2000000 },
-  'BRL-USD': { rate: 0.196, feePercent: 0.20, liquidity: 2000000 },
-  'USD-XOF': { rate: 615.0, feePercent: 0.25, liquidity: 500000 },
-  'EUR-XOF': { rate: 655.957, feePercent: 0.20, liquidity: 800000 },
-  'USD-COP': { rate: 4150.0, feePercent: 0.25, liquidity: 500000 },
-};
+function toFiatSymbol(symbol: string): string {
+  const lower = symbol.toLowerCase();
+  const map: { [k: string]: string } = {
+    cusd: 'USD',
+    usdm: 'USD',
+    usd: 'USD',
+    ceur: 'EUR',
+    eurm: 'EUR',
+    eur: 'EUR',
+    brlm: 'BRL',
+    creal: 'BRL',
+    brl: 'BRL',
+    copm: 'COP',
+    cop: 'COP',
+    xofm: 'XOF',
+    xof: 'XOF',
+    ghsm: 'GHS',
+    ghs: 'GHS',
+    kesm: 'KES',
+    kes: 'KES',
+    ngnm: 'NGN',
+    ngn: 'NGN',
+    inrm: 'INR',
+    inr: 'INR',
+    mxnm: 'MXN',
+    mxn: 'MXN',
+    celo: 'CELO',
+  };
+  return map[lower] || symbol.toUpperCase();
+}
 
-export function findOptimalRoute(
-  sourceCurrency: string,
-  targetCurrency: string,
+function estimateFee(
+  amountIn: number,
+  amountOut: number,
+  inputSymbol: string,
+  outputSymbol: string
+): { feePercent: number; feeUsd: number } {
+  if (!Number.isFinite(amountIn) || amountIn <= 0 || !Number.isFinite(amountOut)) {
+    return { feePercent: 0, feeUsd: 0 };
+  }
+
+  const fiatIn = toFiatSymbol(inputSymbol);
+  const fiatOut = toFiatSymbol(outputSymbol);
+  const fxRate = getFxRate(fiatIn, fiatOut) || amountOut / amountIn;
+  const expectedOut = amountIn * fxRate;
+  const feeOut = Math.max(0, expectedOut - amountOut);
+  const feePercent = expectedOut > 0 ? (feeOut / expectedOut) * 100 : 0;
+
+  const outToUsd = getFxRate(fiatOut, 'USD') || 1;
+  const feeUsd = feeOut * outToUsd;
+  return { feePercent, feeUsd };
+}
+
+function rateOf(amountIn: number, amountOut: number): number {
+  if (!Number.isFinite(amountIn) || amountIn <= 0) return 0;
+  return amountOut / amountIn;
+}
+
+function normalizeRoutes(routes: TransferRoute[]): TransferRoute[] {
+  routes.sort((a, b) => a.totalFeePercent - b.totalFeePercent);
+  routes.forEach((route, index) => {
+    if (index === 0) route.rating = 'best';
+    else if (index === 1) route.rating = 'good';
+    else route.rating = 'acceptable';
+  });
+  return routes;
+}
+
+function formatHop(from: string, to: string, rate: number, feePercent: number): RouteHop {
+  return {
+    from,
+    to,
+    pool: `Mento ${from}-${to}`,
+    rate,
+    feePercent,
+    estimatedGas: '0.001 CELO',
+  };
+}
+
+async function buildOnChainRoutes(
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
   amount: number
-): TransferRoute[] {
+): Promise<TransferRoute[]> {
   const routes: TransferRoute[] = [];
+  const pairs = await getTradeablePairs();
+  const adjacency = new Map<string, TokenInfo[]>();
 
-  // Route 1: Direct path (if available)
-  const directPair = `${sourceCurrency}-${targetCurrency}`;
-  const directPool = MENTO_POOLS[directPair];
-  if (directPool) {
-    const fee = amount * (directPool.feePercent / 100);
-    const output = (amount - fee) * directPool.rate;
+  const addEdge = (from: TokenInfo, to: TokenInfo) => {
+    const key = from.address.toLowerCase();
+    const list = adjacency.get(key) || [];
+    if (!list.find((t) => t.address.toLowerCase() === to.address.toLowerCase())) {
+      list.push(to);
+      adjacency.set(key, list);
+    }
+  };
+
+  for (const [a, b] of pairs) {
+    addEdge(a, b);
+    addEdge(b, a);
+  }
+
+  const tokenInKey = tokenIn.address.toLowerCase();
+  const tokenOutKey = tokenOut.address.toLowerCase();
+
+  const directNeighbors = adjacency.get(tokenInKey) || [];
+  const hasDirect = directNeighbors.some((t) => t.address.toLowerCase() === tokenOutKey);
+
+  if (hasDirect) {
+    const quote = await getSwapQuote(tokenIn.symbol, tokenOut.symbol, amount.toString());
+    const output = Number(quote.outputAmount);
+    const { feePercent, feeUsd } = estimateFee(amount, output, tokenIn.symbol, tokenOut.symbol);
     routes.push({
       id: `route_direct_${Date.now()}`,
-      path: [{
-        from: sourceCurrency,
-        to: targetCurrency,
-        pool: `Mento ${directPair}`,
-        rate: directPool.rate,
-        feePercent: directPool.feePercent,
-        estimatedGas: '0.001 CELO',
-      }],
-      totalFeePercent: directPool.feePercent,
-      totalFeeUSD: fee,
+      path: [formatHop(tokenIn.symbol, tokenOut.symbol, rateOf(amount, output), quote.feePercent || feePercent)],
+      totalFeePercent: feePercent,
+      totalFeeUSD: feeUsd,
       estimatedOutput: output,
       estimatedTimeMinutes: 1,
       rating: 'best',
     });
   }
 
-  // Route 2: Through CELO (sourceCurrency → CELO → targetCurrency)
-  const toCelo = MENTO_POOLS[`${sourceCurrency}-CELO`];
-  const fromCelo = MENTO_POOLS[`CELO-${targetCurrency}`];
-  if (toCelo && fromCelo) {
-    const fee1 = amount * (toCelo.feePercent / 100);
-    const celoAmount = (amount - fee1) * toCelo.rate;
-    const fee2 = celoAmount * (fromCelo.feePercent / 100);
-    const output = (celoAmount - fee2) * fromCelo.rate;
-    const totalFeePercent = toCelo.feePercent + fromCelo.feePercent;
-    const totalFeeUSD = fee1 + (fee2 / toCelo.rate);
+  const intermediates = directNeighbors.filter((t) => t.address.toLowerCase() !== tokenOutKey);
+  const maxHops = 4;
+  let hopCount = 0;
 
+  for (const mid of intermediates) {
+    if (hopCount >= maxHops) break;
+    const midKey = mid.address.toLowerCase();
+    const midNeighbors = adjacency.get(midKey) || [];
+    if (!midNeighbors.some((t) => t.address.toLowerCase() === tokenOutKey)) continue;
+
+    const quote1 = await getSwapQuote(tokenIn.symbol, mid.symbol, amount.toString());
+    const midAmount = Number(quote1.outputAmount);
+    if (!Number.isFinite(midAmount) || midAmount <= 0) continue;
+
+    const quote2 = await getSwapQuote(mid.symbol, tokenOut.symbol, midAmount.toString());
+    const output = Number(quote2.outputAmount);
+    if (!Number.isFinite(output) || output <= 0) continue;
+
+    const { feePercent, feeUsd } = estimateFee(amount, output, tokenIn.symbol, tokenOut.symbol);
     routes.push({
-      id: `route_via_celo_${Date.now()}`,
+      id: `route_via_${mid.symbol.toLowerCase()}_${Date.now()}`,
       path: [
-        {
-          from: sourceCurrency,
-          to: 'CELO',
-          pool: `Mento ${sourceCurrency}-CELO`,
-          rate: toCelo.rate,
-          feePercent: toCelo.feePercent,
-          estimatedGas: '0.001 CELO',
-        },
-        {
-          from: 'CELO',
-          to: targetCurrency,
-          pool: `Mento CELO-${targetCurrency}`,
-          rate: fromCelo.rate,
-          feePercent: fromCelo.feePercent,
-          estimatedGas: '0.001 CELO',
-        },
+        formatHop(tokenIn.symbol, mid.symbol, rateOf(amount, midAmount), quote1.feePercent),
+        formatHop(mid.symbol, tokenOut.symbol, rateOf(midAmount, output), quote2.feePercent),
       ],
-      totalFeePercent,
-      totalFeeUSD,
+      totalFeePercent: feePercent,
+      totalFeeUSD: feeUsd,
       estimatedOutput: output,
       estimatedTimeMinutes: 2,
       rating: 'good',
     });
+    hopCount += 1;
   }
 
-  // Route 3: Through USD intermediary (for non-USD sources)
-  if (sourceCurrency !== 'USD') {
-    const toUsdRate = getFxRate(sourceCurrency, 'USD');
-    const toUSD = MENTO_POOLS[`${sourceCurrency}-USD`]
-      || (toUsdRate ? { rate: toUsdRate, feePercent: 0.3, liquidity: 1000000 } : null);
-    const forexRate = getFxRate('USD', targetCurrency);
-    if (toUSD && forexRate) {
-      const fee1 = amount * (toUSD.feePercent / 100);
-      const usdAmount = (amount - fee1) * toUSD.rate;
-      const celoFee = 0.25;
-      const fee2 = usdAmount * (celoFee / 100);
-      const output = (usdAmount - fee2) * forexRate;
+  return normalizeRoutes(routes);
+}
 
-      routes.push({
-        id: `route_via_usd_${Date.now()}`,
-        path: [
-          {
-            from: sourceCurrency,
-            to: 'USD',
-            pool: `Mento ${sourceCurrency}-USD`,
-            rate: toUSD.rate,
-            feePercent: toUSD.feePercent,
-            estimatedGas: '0.001 CELO',
-          },
-          {
-            from: 'USD',
-            to: targetCurrency,
-            pool: `Celo Stablecoin → Local Currency`,
-            rate: forexRate,
-            feePercent: celoFee,
-            estimatedGas: '0.001 CELO',
-          },
-        ],
-        totalFeePercent: toUSD.feePercent + celoFee,
-        totalFeeUSD: fee1 + fee2 / toUSD.rate,
-        estimatedOutput: output,
-        estimatedTimeMinutes: 3,
-        rating: 'acceptable',
-      });
-    }
-  }
+function buildFxRoutes(sourceCurrency: string, targetCurrency: string, amount: number): TransferRoute[] {
+  const routes: TransferRoute[] = [];
 
-  // Route 4: Default stablecoin route (USD → target via forex)
-  const forexPair = `${sourceCurrency}-${targetCurrency}`;
   const forexRate = getFxRate(sourceCurrency, targetCurrency);
-  if (forexRate && !directPool) {
-    const celoFee = 0.30; // Default Celo transfer fee
+  if (forexRate) {
+    const celoFee = 0.30;
     const fee = amount * (celoFee / 100);
     const output = (amount - fee) * forexRate;
 
     routes.push({
-      id: `route_stablecoin_${Date.now()}`,
+      id: `route_fx_${Date.now()}`,
       path: [{
         from: sourceCurrency,
         to: targetCurrency,
@@ -179,21 +213,30 @@ export function findOptimalRoute(
     });
   }
 
-  // Sort by lowest fee
-  routes.sort((a, b) => a.totalFeePercent - b.totalFeePercent);
+  return normalizeRoutes(routes);
+}
 
-  // Update ratings based on sorted position
-  routes.forEach((route, index) => {
-    if (index === 0) route.rating = 'best';
-    else if (index === 1) route.rating = 'good';
-    else route.rating = 'acceptable';
-  });
+export async function findOptimalRoute(
+  sourceCurrency: string,
+  targetCurrency: string,
+  amount: number
+): Promise<TransferRoute[]> {
+  const tokenIn = await resolveTokenBySymbol(sourceCurrency);
+  const tokenOut = await resolveTokenBySymbol(targetCurrency);
 
-  return routes;
+  if (tokenIn && tokenOut) {
+    try {
+      const routes = await buildOnChainRoutes(tokenIn, tokenOut, amount);
+      if (routes.length > 0) return routes;
+    } catch (error) {
+      console.warn('[Route Optimizer] On-chain route failed, falling back to FX:', error);
+    }
+  }
+
+  return buildFxRoutes(sourceCurrency, targetCurrency, amount);
 }
 
 export function getExchangeRate(from: string, to: string): number {
-  const pair = `${from}-${to}`;
-  if (MENTO_POOLS[pair]) return MENTO_POOLS[pair].rate;
-  return getFxRate(from, to) || 1;
+  const pairRate = getFxRate(from, to);
+  return pairRate || 1;
 }
