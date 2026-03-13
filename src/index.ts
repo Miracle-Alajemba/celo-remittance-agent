@@ -14,6 +14,7 @@ import { findOptimalRoute } from './blockchain/agent/route-optimizer';
 import { getTransactionHistory, getTransactionSummary } from './blockchain/agent/transaction-history';
 import { getScheduledTransfers, getSchedulerStats } from './blockchain/agent/scheduler';
 import { getSwapQuote, getSupportedPairs } from './blockchain/mento/mento-integration';
+import { swapAndSend } from './blockchain/mento/swap-and-send';
 import { getAllWalletBalances, verifyTransactionStatus } from './blockchain/transaction-executor';
 import { getAgentWallet } from './blockchain/agent/erc8004-wallet';
 import { getX402Protocol } from './blockchain/agent/x402-payment';
@@ -180,6 +181,40 @@ app.post('/api/swap/quote', async (req: express.Request, res: express.Response) 
 
     const quote = await getSwapQuote(inputCurrency, outputCurrency, parsedAmount.toString());
     return res.json(quote);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/swap/send
+ * Swap via Mento then send to recipient
+ */
+app.post('/api/swap/send', async (req: express.Request, res: express.Response) => {
+  try {
+    const { recipient, inputCurrency, outputCurrency, inputAmount, maxSlippage } = req.body;
+    if (!recipient || !inputCurrency || !outputCurrency || !inputAmount) {
+      return res.status(400).json({ error: 'recipient, inputCurrency, outputCurrency, and inputAmount are required' });
+    }
+
+    const parsedAmount = parsePositiveAmount(inputAmount);
+    if (!parsedAmount) {
+      return res.status(400).json({ error: 'inputAmount must be a positive number' });
+    }
+
+    const result = await swapAndSend({
+      recipient,
+      inputCurrency,
+      outputCurrency,
+      inputAmount: parsedAmount.toString(),
+      maxSlippage: maxSlippage ? Number(maxSlippage) : undefined,
+    });
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'Swap and send failed', result });
+    }
+
+    return res.json(result);
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }

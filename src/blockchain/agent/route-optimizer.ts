@@ -114,6 +114,10 @@ async function buildOnChainRoutes(
   const pairs = await getTradeablePairs();
   const adjacency = new Map<string, TokenInfo[]>();
 
+  const maxHops = Number(process.env.MENTO_MAX_HOPS || 3);
+  const maxRoutes = Number(process.env.MENTO_MAX_ROUTES || 6);
+  const maxExpansions = Number(process.env.MENTO_MAX_ROUTE_EXPANSIONS || 80);
+
   const addEdge = (from: TokenInfo, to: TokenInfo) => {
     const key = from.address.toLowerCase();
     const list = adjacency.get(key) || [];
@@ -131,56 +135,72 @@ async function buildOnChainRoutes(
   const tokenInKey = tokenIn.address.toLowerCase();
   const tokenOutKey = tokenOut.address.toLowerCase();
 
-  const directNeighbors = adjacency.get(tokenInKey) || [];
-  const hasDirect = directNeighbors.some((t) => t.address.toLowerCase() === tokenOutKey);
+  const paths: TokenInfo[][] = [];
+  const queue: TokenInfo[][] = [[tokenIn]];
+  let expansions = 0;
 
-  if (hasDirect) {
-    const quote = await getSwapQuote(tokenIn.symbol, tokenOut.symbol, amount.toString());
-    const output = Number(quote.outputAmount);
-    const { feePercent, feeUsd } = estimateFee(amount, output, tokenIn.symbol, tokenOut.symbol);
-    routes.push({
-      id: `route_direct_${Date.now()}`,
-      path: [formatHop(tokenIn.symbol, tokenOut.symbol, rateOf(amount, output), quote.feePercent || feePercent)],
-      totalFeePercent: feePercent,
-      totalFeeUSD: feeUsd,
-      estimatedOutput: output,
-      estimatedTimeMinutes: 1,
-      rating: 'best',
-    });
+  while (queue.length > 0 && paths.length < maxRoutes && expansions < maxExpansions) {
+    const path = queue.shift() as TokenInfo[];
+    const last = path[path.length - 1];
+    const depth = path.length - 1;
+
+    if (depth >= maxHops) continue;
+
+    const neighbors = adjacency.get(last.address.toLowerCase()) || [];
+    for (const next of neighbors) {
+      const nextKey = next.address.toLowerCase();
+      if (path.some((t) => t.address.toLowerCase() === nextKey)) continue;
+
+      const newPath = [...path, next];
+      if (nextKey === tokenOutKey) {
+        paths.push(newPath);
+        if (paths.length >= maxRoutes) break;
+      } else {
+        queue.push(newPath);
+      }
+      expansions += 1;
+      if (expansions >= maxExpansions) break;
+    }
   }
 
-  const intermediates = directNeighbors.filter((t) => t.address.toLowerCase() !== tokenOutKey);
-  const maxHops = 4;
-  let hopCount = 0;
+  for (const path of paths) {
+    let currentAmount = amount;
+    const hops: RouteHop[] = [];
+    let failed = false;
 
-  for (const mid of intermediates) {
-    if (hopCount >= maxHops) break;
-    const midKey = mid.address.toLowerCase();
-    const midNeighbors = adjacency.get(midKey) || [];
-    if (!midNeighbors.some((t) => t.address.toLowerCase() === tokenOutKey)) continue;
+    for (let i = 0; i < path.length - 1; i += 1) {
+      const from = path[i].symbol;
+      const to = path[i + 1].symbol;
+      const quote = await getSwapQuote(from, to, currentAmount.toString());
+      const nextAmount = Number(quote.outputAmount);
 
-    const quote1 = await getSwapQuote(tokenIn.symbol, mid.symbol, amount.toString());
-    const midAmount = Number(quote1.outputAmount);
-    if (!Number.isFinite(midAmount) || midAmount <= 0) continue;
+      if (!Number.isFinite(nextAmount) || nextAmount <= 0) {
+        failed = true;
+        break;
+      }
 
-    const quote2 = await getSwapQuote(mid.symbol, tokenOut.symbol, midAmount.toString());
-    const output = Number(quote2.outputAmount);
-    if (!Number.isFinite(output) || output <= 0) continue;
+      hops.push(formatHop(from, to, rateOf(currentAmount, nextAmount), quote.feePercent));
+      currentAmount = nextAmount;
+    }
 
-    const { feePercent, feeUsd } = estimateFee(amount, output, tokenIn.symbol, tokenOut.symbol);
+    if (failed) continue;
+
+    const { feePercent, feeUsd } = estimateFee(
+      amount,
+      currentAmount,
+      tokenIn.symbol,
+      tokenOut.symbol
+    );
+
     routes.push({
-      id: `route_via_${mid.symbol.toLowerCase()}_${Date.now()}`,
-      path: [
-        formatHop(tokenIn.symbol, mid.symbol, rateOf(amount, midAmount), quote1.feePercent),
-        formatHop(mid.symbol, tokenOut.symbol, rateOf(midAmount, output), quote2.feePercent),
-      ],
+      id: `route_${path.map((p) => p.symbol.toLowerCase()).join('_')}_${Date.now()}`,
+      path: hops,
       totalFeePercent: feePercent,
       totalFeeUSD: feeUsd,
-      estimatedOutput: output,
-      estimatedTimeMinutes: 2,
-      rating: 'good',
+      estimatedOutput: currentAmount,
+      estimatedTimeMinutes: Math.max(1, hops.length),
+      rating: 'best',
     });
-    hopCount += 1;
   }
 
   return normalizeRoutes(routes);
