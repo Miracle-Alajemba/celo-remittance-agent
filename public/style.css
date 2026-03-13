@@ -815,6 +815,11 @@ body {
   padding: 30px 20px;
 }
 
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
 /* ---- Fee Comparison ---- */
 #view-compare {
   overflow-y: auto;
@@ -885,6 +890,71 @@ body {
 
 .compare-results {
   padding: 0 32px 32px;
+}
+
+/* ---- Swap & Send ---- */
+#view-swap {
+  overflow-y: auto;
+}
+
+.swap-results {
+  padding: 0 32px 32px;
+}
+
+.swap-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  margin-bottom: 12px;
+}
+
+.swap-card.success {
+  border-color: rgba(53, 208, 127, 0.35);
+  box-shadow: var(--shadow-glow);
+}
+
+.swap-card.error {
+  border-color: rgba(255, 90, 90, 0.4);
+}
+
+.swap-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.swap-status {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.swap-title {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.swap-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.swap-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.swap-row span:last-child {
+  color: var(--text-primary);
+  font-weight: 600;
+  word-break: break-all;
 }
 
 /* Fee comparison cards */

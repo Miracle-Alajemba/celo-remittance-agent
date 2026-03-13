@@ -19,6 +19,7 @@ const sidebarToggle = document.getElementById('sidebarToggle');
 const sidebar = document.getElementById('sidebar');
 const mobileMenuBtn = document.getElementById('mobileMenuBtn');
 const compareBtn = document.getElementById('compareBtn');
+const swapSendBtn = document.getElementById('swapSendBtn');
 
 // ==================== Navigation ====================
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -528,6 +529,129 @@ function renderFeeComparison(comparison) {
         That's <strong style="color: #FCFF52;">${Number(comparison.bestSavings).toLocaleString()} ${comparison.receiveCurrency}</strong> more in your recipient's pocket
       </div>
     </div>`;
+
+  container.innerHTML = html;
+}
+
+// ==================== Swap & Send Page ====================
+if (swapSendBtn) {
+  swapSendBtn.addEventListener('click', async () => {
+    const recipient = document.getElementById('swapRecipient').value.trim();
+    const inputAmount = document.getElementById('swapInputAmount').value;
+    const inputCurrency = document.getElementById('swapInputCurrency').value;
+    const outputCurrency = document.getElementById('swapOutputCurrency').value;
+    const maxSlippage = document.getElementById('swapSlippage').value;
+
+    if (!recipient || !inputAmount || parseFloat(inputAmount) <= 0) return;
+
+    swapSendBtn.textContent = 'Processing...';
+    swapSendBtn.disabled = true;
+    renderSwapResult({ status: 'pending', message: 'Submitting swap and transfer...' });
+
+    try {
+      const res = await fetch(`${API_BASE}/api/swap/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipient,
+          inputCurrency,
+          outputCurrency,
+          inputAmount,
+          maxSlippage: maxSlippage ? Number(maxSlippage) : undefined,
+        }),
+      });
+      const data = await res.json();
+      const baseDetails = {
+        recipient,
+        inputCurrency,
+        outputCurrency,
+        inputAmount,
+        outputAmount: data?.swap?.outputAmount || '',
+      };
+
+      if (!res.ok || !data.success) {
+        renderSwapResult({
+          status: 'error',
+          message: data.error || 'Swap and send failed',
+          details: { ...baseDetails, ...(data.result || {}) },
+        });
+      } else {
+        renderSwapResult({
+          status: 'success',
+          message: 'Swap and send completed',
+          details: { ...baseDetails, ...data },
+        });
+      }
+    } catch (error) {
+      renderSwapResult({
+        status: 'error',
+        message: 'Error calling API. Make sure the server is running.',
+      });
+    } finally {
+      swapSendBtn.textContent = 'Swap & Send';
+      swapSendBtn.disabled = false;
+    }
+  });
+}
+
+function renderSwapResult(payload) {
+  const container = document.getElementById('swapResults');
+  if (!container) return;
+
+  if (!payload) {
+    container.innerHTML = '<p class="empty-state">No result yet</p>';
+    return;
+  }
+
+  const status = payload.status || 'info';
+  const message = payload.message || 'Swap result';
+  const details = payload.details || {};
+  const swap = details.swap || null;
+  const transfer = details.transfer || null;
+
+  const statusLabel = status === 'success' ? '✅ Success' : status === 'error' ? '❌ Error' : '⏳ Pending';
+
+  let html = `
+    <div class="swap-card ${status}">
+      <div class="swap-card-header">
+        <span class="swap-status">${statusLabel}</span>
+        <span class="swap-title">${message}</span>
+      </div>
+      <div class="swap-card-body">
+        <div class="swap-row"><span>Recipient</span><span>${details.recipient || '—'}</span></div>
+        <div class="swap-row"><span>Input</span><span>${details.inputCurrency || '—'} ${details.inputAmount || ''}</span></div>
+        <div class="swap-row"><span>Output</span><span>${details.outputCurrency || '—'} ${details.outputAmount || ''}</span></div>
+      </div>
+    </div>`;
+
+  if (swap) {
+    html += `
+      <div class="swap-card">
+        <div class="swap-card-header">
+          <span class="swap-status">🔁 Swap</span>
+          <span class="swap-title">${swap.txHash ? 'On-chain swap submitted' : 'Swap details'}</span>
+        </div>
+        <div class="swap-card-body">
+          <div class="swap-row"><span>Tx Hash</span><span class="mono">${swap.txHash || '—'}</span></div>
+          <div class="swap-row"><span>Block</span><span>${swap.blockNumber || '—'}</span></div>
+        </div>
+      </div>`;
+  }
+
+  if (transfer) {
+    html += `
+      <div class="swap-card">
+        <div class="swap-card-header">
+          <span class="swap-status">🚀 Transfer</span>
+          <span class="swap-title">${transfer.txHash ? 'Transfer submitted' : 'Transfer details'}</span>
+        </div>
+        <div class="swap-card-body">
+          <div class="swap-row"><span>Tx Hash</span><span class="mono">${transfer.txHash || '—'}</span></div>
+          <div class="swap-row"><span>Block</span><span>${transfer.blockNumber || '—'}</span></div>
+          <div class="swap-row"><span>Gas Used</span><span>${transfer.gasUsed || '—'}</span></div>
+        </div>
+      </div>`;
+  }
 
   container.innerHTML = html;
 }

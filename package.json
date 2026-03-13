@@ -7,7 +7,8 @@
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test:send-celo": "ts-node scripts/test-send-celo.ts"
+    "test:send-celo": "ts-node scripts/test-send-celo.ts",
+    "test:swap-send": "ts-node scripts/test-swap-send.ts"
   },
   "dependencies": {
     "@mento-protocol/mento-sdk": "^1.10.3",

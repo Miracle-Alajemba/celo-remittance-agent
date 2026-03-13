@@ -52,6 +52,10 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
           <span>Compare Fees</span>
         </button>
+        <button class="nav-item" data-view="swap" id="nav-swap">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M8 21H3v-5"/><path d="M21 8c-2.5 2.5-5.5 4-9 4-1.4 0-2.8-.3-4-.9"/><path d="M3 16c2.5-2.5 5.5-4 9-4 1.4 0 2.8.3 4 .9"/></svg>
+          <span>Swap & Send</span>
+        </button>
         <button class="nav-item" data-view="history" id="nav-history">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
           <span>History</span>
@@ -254,6 +258,60 @@
         </div>
         <div class="compare-results" id="compareResults">
           <p class="empty-state">Enter an amount and click Compare to see fee breakdowns</p>
+        </div>
+      </div>
+
+      <!-- Swap & Send View -->
+      <div class="view" id="view-swap">
+        <div class="view-header">
+          <h1>Swap & Send</h1>
+          <p>Swap on Mento and send directly to a recipient</p>
+        </div>
+        <div class="compare-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="swapRecipient">Recipient Address</label>
+              <input type="text" id="swapRecipient" placeholder="0x..." autocomplete="off">
+            </div>
+            <div class="form-group">
+              <label for="swapInputAmount">Amount</label>
+              <input type="number" id="swapInputAmount" value="10" min="0.0001" step="0.0001">
+            </div>
+            <div class="form-group">
+              <label for="swapInputCurrency">From</label>
+              <select id="swapInputCurrency">
+                <option value="cUSD">cUSD</option>
+                <option value="cEUR">cEUR</option>
+                <option value="USDm">USDm</option>
+                <option value="EURm">EURm</option>
+                <option value="BRLm">BRLm</option>
+                <option value="COPm">COPm</option>
+                <option value="XOFm">XOFm</option>
+                <option value="CELO">CELO</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="swapOutputCurrency">To</label>
+              <select id="swapOutputCurrency">
+                <option value="cEUR">cEUR</option>
+                <option value="cUSD">cUSD</option>
+                <option value="USDm">USDm</option>
+                <option value="EURm">EURm</option>
+                <option value="BRLm">BRLm</option>
+                <option value="COPm">COPm</option>
+                <option value="XOFm">XOFm</option>
+                <option value="CELO">CELO</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="swapSlippage">Max Slippage</label>
+              <input type="number" id="swapSlippage" value="0.01" min="0" step="0.001">
+            </div>
+            <button class="compare-btn" id="swapSendBtn">Swap & Send</button>
+          </div>
+        </div>
+        <div class="swap-results" id="swapResults">
+          <p class="empty-state">Enter details and click Swap & Send to execute a testnet transfer</p>
         </div>
       </div>
 
