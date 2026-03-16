@@ -24,7 +24,7 @@ This project reimagines remittances as a conversational experience powered by Ce
 - Parses remittance intents in English, Spanish, Portuguese, and French
 - Routes transfers across supported Celo stablecoin corridors
 - Uses Mento for swap quotes and conversion paths
-- Compares estimated fees against traditional providers
+- Compares fees against traditional providers using live provider data where available
 - Supports recurring transfers and recipient notifications
 - Tracks transaction history and spending limits
 - Exposes an API and chat-based agent flows for demos
@@ -33,7 +33,7 @@ This project reimagines remittances as a conversational experience powered by Ce
 
 - Natural language remittance intent parsing
 - Multi-language support for a global user base
-- Fee comparison against traditional remittance providers
+- Fee comparison against traditional remittance providers with live quotes plus fallback estimates
 - Route optimization across supported corridors
 - Recurring transfer scheduling
 - SMS and WhatsApp notifications
@@ -102,6 +102,7 @@ Optional integrations include:
 
 - `MONGODB_URI`
 - `ANTHROPIC_API_KEY`
+- `WISE_API_URL`
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_PHONE_NUMBER`

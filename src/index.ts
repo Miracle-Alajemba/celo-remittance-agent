@@ -153,7 +153,7 @@ app.post(
           .json({ error: "amount must be a positive number" });
       }
 
-      const comparison = compareFees(
+      const comparison = await compareFees(
         parsedAmount,
         sendCurrency,
         receiveCountry,

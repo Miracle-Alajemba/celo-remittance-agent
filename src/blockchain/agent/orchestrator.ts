@@ -507,7 +507,7 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
       case "history":
         return await this.handleHistory(lang);
       case "compare_fees":
-        return this.handleFeeComparison(intent);
+        return await this.handleFeeComparison(intent);
       case "swap":
         return await this.handleSwapIntent(intent);
       case "schedule":
@@ -598,7 +598,7 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
     }
 
     // Get fee comparison
-    const comparison = compareFees(
+    const comparison = await compareFees(
       amount,
       sourceCurrency,
       intent.recipientCountry || "PH",
@@ -1171,13 +1171,19 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
     return response;
   }
 
-  private handleFeeComparison(intent: RemittanceIntent): AgentResponse {
+  private async handleFeeComparison(
+    intent: RemittanceIntent,
+  ): Promise<AgentResponse> {
     const lang = intent.detectedLanguage;
     const amount = parseFloat(intent.amount || "100");
     const sourceCurrency = intent.sourceCurrency || "USD";
     const recipientCountry = intent.recipientCountry || "PH";
 
-    const comparison = compareFees(amount, sourceCurrency, recipientCountry);
+    const comparison = await compareFees(
+      amount,
+      sourceCurrency,
+      recipientCountry,
+    );
     const formatted = formatFeeComparison(comparison, lang);
 
     const response: AgentResponse = {

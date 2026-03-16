@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getRate = getRate;
+exports.getRateOrFetch = getRateOrFetch;
 exports.getSupportedPairs = getSupportedPairs;
 exports.startRateRefresher = startRateRefresher;
 const axios_1 = __importDefault(require("axios"));
@@ -30,6 +31,9 @@ const STATIC_RATES = {
 };
 const cache = new Map(Object.entries(STATIC_RATES));
 const lastUpdatedByBase = new Map();
+function getCacheTtlMs() {
+    return Number(process.env.FX_CACHE_TTL_MS || 300000);
+}
 function getBaseCurrencies() {
     const bases = new Set();
     for (const pair of Object.keys(STATIC_RATES)) {
@@ -85,7 +89,40 @@ function getRate(base, quote) {
     if (base === quote)
         return 1;
     const pair = `${base}-${quote}`;
-    return cache.get(pair) ?? null;
+    const direct = cache.get(pair);
+    if (typeof direct === 'number')
+        return direct;
+    const reverse = cache.get(`${quote}-${base}`);
+    if (typeof reverse === 'number' && reverse > 0) {
+        return 1 / reverse;
+    }
+    return null;
+}
+async function getRateOrFetch(base, quote) {
+    if (base === quote)
+        return 1;
+    const ttlMs = getCacheTtlMs();
+    const lastUpdated = lastUpdatedByBase.get(base) || 0;
+    const cached = getRate(base, quote);
+    if (cached && Date.now() - lastUpdated <= ttlMs) {
+        return cached;
+    }
+    try {
+        await fetchRatesForBase(base);
+    }
+    catch (error) {
+        console.warn(`[Rates] Failed to fetch rates for ${base}:`, error);
+    }
+    const refreshed = getRate(base, quote);
+    if (refreshed)
+        return refreshed;
+    try {
+        await fetchRatesForBase(quote);
+    }
+    catch (error) {
+        console.warn(`[Rates] Failed to fetch inverse rates for ${quote}:`, error);
+    }
+    return getRate(base, quote);
 }
 function getSupportedPairs() {
     return Array.from(cache.keys());
@@ -96,7 +133,7 @@ function startRateRefresher() {
         console.warn('[Rates] FX_API_URL not set. Using static rates only.');
         return;
     }
-    const refreshMs = Number(process.env.FX_CACHE_TTL_MS || 300000);
+    const refreshMs = getCacheTtlMs();
     const bases = getBaseCurrencies();
     const refreshAll = async () => {
         for (const base of bases) {

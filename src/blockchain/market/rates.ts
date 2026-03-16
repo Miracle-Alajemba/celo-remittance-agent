@@ -30,6 +30,10 @@ const STATIC_RATES: { [pair: string]: number } = {
 const cache: Map<string, number> = new Map(Object.entries(STATIC_RATES));
 const lastUpdatedByBase: Map<string, number> = new Map();
 
+function getCacheTtlMs(): number {
+  return Number(process.env.FX_CACHE_TTL_MS || 300000);
+}
+
 function getBaseCurrencies(): string[] {
   const bases = new Set<string>();
   for (const pair of Object.keys(STATIC_RATES)) {
@@ -90,7 +94,47 @@ async function fetchRatesForBase(base: string): Promise<void> {
 export function getRate(base: string, quote: string): number | null {
   if (base === quote) return 1;
   const pair = `${base}-${quote}`;
-  return cache.get(pair) ?? null;
+  const direct = cache.get(pair);
+  if (typeof direct === 'number') return direct;
+
+  const reverse = cache.get(`${quote}-${base}`);
+  if (typeof reverse === 'number' && reverse > 0) {
+    return 1 / reverse;
+  }
+
+  return null;
+}
+
+export async function getRateOrFetch(
+  base: string,
+  quote: string,
+): Promise<number | null> {
+  if (base === quote) return 1;
+
+  const ttlMs = getCacheTtlMs();
+  const lastUpdated = lastUpdatedByBase.get(base) || 0;
+  const cached = getRate(base, quote);
+
+  if (cached && Date.now() - lastUpdated <= ttlMs) {
+    return cached;
+  }
+
+  try {
+    await fetchRatesForBase(base);
+  } catch (error) {
+    console.warn(`[Rates] Failed to fetch rates for ${base}:`, error);
+  }
+
+  const refreshed = getRate(base, quote);
+  if (refreshed) return refreshed;
+
+  try {
+    await fetchRatesForBase(quote);
+  } catch (error) {
+    console.warn(`[Rates] Failed to fetch inverse rates for ${quote}:`, error);
+  }
+
+  return getRate(base, quote);
 }
 
 export function getSupportedPairs(): string[] {
@@ -104,7 +148,7 @@ export function startRateRefresher(): void {
     return;
   }
 
-  const refreshMs = Number(process.env.FX_CACHE_TTL_MS || 300000);
+  const refreshMs = getCacheTtlMs();
   const bases = getBaseCurrencies();
 
   const refreshAll = async () => {

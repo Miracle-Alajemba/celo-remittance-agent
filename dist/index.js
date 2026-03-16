@@ -154,7 +154,7 @@ app.post("/api/fees/compare", async (req, res) => {
                 .status(400)
                 .json({ error: "amount must be a positive number" });
         }
-        const comparison = (0, fee_comparator_1.compareFees)(parsedAmount, sendCurrency, receiveCountry);
+        const comparison = await (0, fee_comparator_1.compareFees)(parsedAmount, sendCurrency, receiveCountry);
         return res.json(comparison);
     }
     catch (error) {

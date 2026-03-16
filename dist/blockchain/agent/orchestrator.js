@@ -366,7 +366,7 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
             case "history":
                 return await this.handleHistory(lang);
             case "compare_fees":
-                return this.handleFeeComparison(intent);
+                return await this.handleFeeComparison(intent);
             case "swap":
                 return await this.handleSwapIntent(intent);
             case "schedule":
@@ -418,7 +418,7 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
             return this.createResponse("❌ No route found for this transfer corridor.", "error", lang);
         }
         // Get fee comparison
-        const comparison = (0, fee_comparator_1.compareFees)(amount, sourceCurrency, intent.recipientCountry || "PH");
+        const comparison = await (0, fee_comparator_1.compareFees)(amount, sourceCurrency, intent.recipientCountry || "PH");
         // Build route info string
         let routeInfo = "";
         if (bestRoute.path.length > 1) {
@@ -868,12 +868,12 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
         this.memory.addMessage("agent", response.message);
         return response;
     }
-    handleFeeComparison(intent) {
+    async handleFeeComparison(intent) {
         const lang = intent.detectedLanguage;
         const amount = parseFloat(intent.amount || "100");
         const sourceCurrency = intent.sourceCurrency || "USD";
         const recipientCountry = intent.recipientCountry || "PH";
-        const comparison = (0, fee_comparator_1.compareFees)(amount, sourceCurrency, recipientCountry);
+        const comparison = await (0, fee_comparator_1.compareFees)(amount, sourceCurrency, recipientCountry);
         const formatted = (0, fee_comparator_1.formatFeeComparison)(comparison, lang);
         const response = {
             message: formatted,

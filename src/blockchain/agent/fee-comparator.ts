@@ -1,287 +1,11 @@
-// /**
-//  * Fee Comparison Engine
-//  * Compares Celo remittance costs vs traditional providers (Western Union, Wise, etc.)
-//  */
-
-// export interface ProviderFees {
-//   provider: string;
-//   sendAmount: number;
-//   sendCurrency: string;
-//   receiveAmount: number;
-//   receiveCurrency: string;
-//   exchangeRate: number;
-//   transferFee: number;
-//   totalCost: number;
-//   estimatedDelivery: string;
-//   savings?: number;
-//   savingsPercent?: number;
-// }
-
-// export interface FeeComparison {
-//   corridor: string;
-//   sendAmount: number;
-//   sendCurrency: string;
-//   receiveCurrency: string;
-//   celoFees: ProviderFees;
-//   traditionalProviders: ProviderFees[];
-//   bestSavings: number;
-//   bestSavingsPercent: number;
-//   avgSavings: number;
-// }
-
-// // Traditional provider fee structures (realistic approximations)
-// const PROVIDER_FEES: {
-//   [provider: string]: {
-//     fixedFee: { [corridor: string]: number };
-//     feePercent: number;
-//     rateMarkup: number; // percentage markup on mid-market rate
-//     deliveryTime: string;
-//   };
-// } = {
-//   'Western Union': {
-//     fixedFee: {
-//       'US-PH': 5.0,
-//       'US-NG': 7.0,
-//       'US-KE': 5.0,
-//       'US-BR': 6.0,
-//       'US-CO': 5.0,
-//       'US-GH': 7.0,
-//       'US-IN': 5.0,
-//       'US-MX': 4.99,
-//       'EU-PH': 6.0,
-//       'EU-NG': 8.0,
-//       'EU-KE': 6.0,
-//       'GB-PH': 5.0,
-//       'GB-NG': 5.0,
-//       'GB-KE': 5.0,
-//       default: 7.99,
-//     },
-//     feePercent: 0,
-//     rateMarkup: 3.5, // 3.5% worse than mid-market
-//     deliveryTime: '1-3 business days',
-//   },
-//   'Wise (TransferWise)': {
-//     fixedFee: {
-//       'US-PH': 1.50,
-//       'US-NG': 2.00,
-//       'US-KE': 1.50,
-//       'US-BR': 2.50,
-//       'US-CO': 2.00,
-//       'US-GH': 2.50,
-//       'US-IN': 1.50,
-//       'US-MX': 1.50,
-//       'EU-PH': 1.30,
-//       'EU-NG': 1.80,
-//       'EU-KE': 1.30,
-//       'GB-PH': 1.20,
-//       'GB-NG': 1.50,
-//       'GB-KE': 1.00,
-//       default: 2.50,
-//     },
-//     feePercent: 0.65,
-//     rateMarkup: 0.5, // Wise uses near mid-market rates
-//     deliveryTime: '1-2 business days',
-//   },
-//   'MoneyGram': {
-//     fixedFee: {
-//       'US-PH': 4.99,
-//       'US-NG': 6.99,
-//       'US-KE': 4.99,
-//       'US-BR': 5.99,
-//       'US-CO': 4.99,
-//       'US-GH': 6.99,
-//       'US-IN': 4.99,
-//       'US-MX': 3.99,
-//       default: 6.99,
-//     },
-//     feePercent: 0,
-//     rateMarkup: 3.0,
-//     deliveryTime: '1-3 business days',
-//   },
-//   'Remitly': {
-//     fixedFee: {
-//       'US-PH': 1.99,
-//       'US-NG': 3.99,
-//       'US-KE': 1.99,
-//       'US-IN': 1.99,
-//       'US-MX': 1.99,
-//       default: 3.99,
-//     },
-//     feePercent: 0,
-//     rateMarkup: 1.5,
-//     deliveryTime: '1-2 business days',
-//   },
-// };
-
-// // Mid-market exchange rates (reference rates)
-// const MID_MARKET_RATES: { [pair: string]: number } = {
-//   'USD-PHP': 56.5,
-//   'USD-NGN': 1580,
-//   'USD-KES': 131,
-//   'USD-BRL': 5.10,
-//   'USD-COP': 4150,
-//   'USD-GHS': 15.5,
-//   'USD-INR': 83.5,
-//   'USD-MXN': 17.2,
-//   'USD-XOF': 615,
-//   'EUR-PHP': 61.2,
-//   'EUR-NGN': 1720,
-//   'EUR-KES': 142,
-//   'EUR-XOF': 655.957,
-//   'GBP-PHP': 71.5,
-//   'GBP-NGN': 2000,
-//   'GBP-KES': 166,
-// };
-
-// function getCorridorCode(sendCurrency: string, receiveCountry: string): string {
-//   const currencyToCountry: { [c: string]: string } = {
-//     USD: 'US',
-//     EUR: 'EU',
-//     GBP: 'GB',
-//     BRL: 'BR',
-//   };
-//   const countryMap: { [c: string]: string } = {
-//     PH: 'PH', NG: 'NG', KE: 'KE', BR: 'BR', CO: 'CO',
-//     GH: 'GH', IN: 'IN', MX: 'MX', SN: 'SN', CI: 'CI',
-//   };
-
-//   const from = currencyToCountry[sendCurrency] || 'US';
-//   const to = countryMap[receiveCountry] || receiveCountry;
-//   return `${from}-${to}`;
-// }
-
-// function getReceiveCurrency(country: string): string {
-//   const map: { [c: string]: string } = {
-//     PH: 'PHP', NG: 'NGN', KE: 'KES', BR: 'BRL', CO: 'COP',
-//     GH: 'GHS', IN: 'INR', MX: 'MXN', SN: 'XOF', CI: 'XOF',
-//   };
-//   return map[country] || 'USD';
-// }
-
-// export function compareFees(
-//   amount: number,
-//   sendCurrency: string,
-//   receiveCountry: string
-// ): FeeComparison {
-//   const receiveCurrency = getReceiveCurrency(receiveCountry);
-//   const ratePair = `${sendCurrency}-${receiveCurrency}`;
-//   const midMarketRate = MID_MARKET_RATES[ratePair] || 1;
-//   const corridor = getCorridorCode(sendCurrency, receiveCountry);
-
-//   // Celo fees (using Mento)
-//   const celoFeePercent = 0.30; // 0.3% Mento swap fee
-//   const celoFixedFee = 0; // No fixed fee
-//   const celoRate = midMarketRate * (1 - 0.002); // 0.2% rate markup (very close to mid-market)
-//   const celoTransferFee = amount * (celoFeePercent / 100);
-//   const celoReceiveAmount = (amount - celoTransferFee) * celoRate;
-//   const celoTotalCost = celoTransferFee;
-
-//   const celoFees: ProviderFees = {
-//     provider: 'Celo (Mento)',
-//     sendAmount: amount,
-//     sendCurrency,
-//     receiveAmount: Math.round(celoReceiveAmount * 100) / 100,
-//     receiveCurrency,
-//     exchangeRate: celoRate,
-//     transferFee: celoTransferFee,
-//     totalCost: celoTotalCost,
-//     estimatedDelivery: '< 5 seconds',
-//   };
-
-//   // Traditional provider fees
-//   const traditionalProviders: ProviderFees[] = [];
-
-//   for (const [providerName, config] of Object.entries(PROVIDER_FEES)) {
-//     const fixedFee = config.fixedFee[corridor] ?? config.fixedFee['default'];
-//     const percentFee = amount * (config.feePercent / 100);
-//     const totalFee = fixedFee + percentFee;
-//     const providerRate = midMarketRate * (1 - config.rateMarkup / 100);
-//     const receiveAmount = (amount - totalFee) * providerRate;
-//     const totalCost = totalFee + (amount * config.rateMarkup / 100);
-
-//     const savings = receiveAmount > 0 ? celoReceiveAmount - receiveAmount : 0;
-//     const savingsPercent = receiveAmount > 0 ? (savings / receiveAmount) * 100 : 0;
-
-//     traditionalProviders.push({
-//       provider: providerName,
-//       sendAmount: amount,
-//       sendCurrency,
-//       receiveAmount: Math.round(receiveAmount * 100) / 100,
-//       receiveCurrency,
-//       exchangeRate: providerRate,
-//       transferFee: totalFee,
-//       totalCost: Math.round(totalCost * 100) / 100,
-//       estimatedDelivery: config.deliveryTime,
-//       savings: Math.round(savings * 100) / 100,
-//       savingsPercent: Math.round(savingsPercent * 100) / 100,
-//     });
-//   }
-
-//   // Sort by most expensive first (to show biggest savings first)
-//   traditionalProviders.sort((a, b) => (a.receiveAmount) - (b.receiveAmount));
-
-//   const bestSavings = Math.max(...traditionalProviders.map((p) => p.savings || 0));
-//   const bestSavingsPercent = Math.max(...traditionalProviders.map((p) => p.savingsPercent || 0));
-//   const avgSavings = traditionalProviders.reduce((sum, p) => sum + (p.savings || 0), 0) / traditionalProviders.length;
-
-//   return {
-//     corridor,
-//     sendAmount: amount,
-//     sendCurrency,
-//     receiveCurrency,
-//     celoFees,
-//     traditionalProviders,
-//     bestSavings: Math.round(bestSavings * 100) / 100,
-//     bestSavingsPercent: Math.round(bestSavingsPercent * 100) / 100,
-//     avgSavings: Math.round(avgSavings * 100) / 100,
-//   };
-// }
-
-// export function formatFeeComparison(comparison: FeeComparison, lang: string = 'en'): string {
-//   const { celoFees, traditionalProviders, sendAmount, sendCurrency, receiveCurrency } = comparison;
-
-//   const headers: { [lang: string]: { title: string; you_send: string; they_receive: string; fee: string; rate: string; delivery: string; savings: string } } = {
-//     en: { title: '💰 Fee Comparison', you_send: 'You send', they_receive: 'They receive', fee: 'Fee', rate: 'Rate', delivery: 'Delivery', savings: 'You save' },
-//     es: { title: '💰 Comparación de Tarifas', you_send: 'Envías', they_receive: 'Reciben', fee: 'Tarifa', rate: 'Tasa', delivery: 'Entrega', savings: 'Ahorras' },
-//     pt: { title: '💰 Comparação de Taxas', you_send: 'Você envia', they_receive: 'Eles recebem', fee: 'Taxa', rate: 'Câmbio', delivery: 'Entrega', savings: 'Você economiza' },
-//     fr: { title: '💰 Comparaison des Frais', you_send: 'Vous envoyez', they_receive: 'Ils reçoivent', fee: 'Frais', rate: 'Taux', delivery: 'Livraison', savings: 'Vous économisez' },
-//   };
-
-//   const h = headers[lang] || headers['en'];
-//   let output = `${h.title}\n`;
-//   output += `${h.you_send}: ${sendAmount} ${sendCurrency}\n\n`;
-
-//   // Celo row
-//   output += `🟢 **${celoFees.provider}** (Recommended)\n`;
-//   output += `   ${h.they_receive}: ${celoFees.receiveAmount.toLocaleString()} ${receiveCurrency}\n`;
-//   output += `   ${h.fee}: $${celoFees.transferFee.toFixed(2)} (${(celoFees.transferFee / sendAmount * 100).toFixed(2)}%)\n`;
-//   output += `   ${h.rate}: 1 ${sendCurrency} = ${celoFees.exchangeRate.toFixed(4)} ${receiveCurrency}\n`;
-//   output += `   ${h.delivery}: ${celoFees.estimatedDelivery}\n\n`;
-
-//   // Traditional providers
-//   for (const provider of traditionalProviders) {
-//     output += `🔴 **${provider.provider}**\n`;
-//     output += `   ${h.they_receive}: ${provider.receiveAmount.toLocaleString()} ${receiveCurrency}\n`;
-//     output += `   ${h.fee}: $${provider.transferFee.toFixed(2)}\n`;
-//     output += `   ${h.rate}: 1 ${sendCurrency} = ${provider.exchangeRate.toFixed(4)} ${receiveCurrency}\n`;
-//     output += `   ${h.delivery}: ${provider.estimatedDelivery}\n`;
-//     if (provider.savings && provider.savings > 0) {
-//       output += `   ${h.savings}: ${provider.savings.toLocaleString()} ${receiveCurrency} (${provider.savingsPercent}%)\n`;
-//     }
-//     output += '\n';
-//   }
-
-//   return output;
-// }
-
-
-
 /**
  * Fee Comparison Engine
- * Compares Celo remittance costs vs traditional providers
+ * Uses live FX data plus Wise's comparison API when available, with
+ * estimate-based fallbacks for providers that do not return a live quote.
  */
 
-import { getRate as getFxRate } from '../market/rates';
+import axios from "axios";
+import { getRateOrFetch } from "../market/rates";
 
 export interface ProviderFees {
   provider: string;
@@ -295,6 +19,10 @@ export interface ProviderFees {
   estimatedDelivery: string;
   savings?: number;
   savingsPercent?: number;
+  dataSource?: "wise_comparison_api" | "live_fx_estimate";
+  quoteType?: "live_estimate" | "estimated";
+  collectedAt?: string;
+  providerAlias?: string;
 }
 
 export interface FeeComparison {
@@ -307,18 +35,49 @@ export interface FeeComparison {
   bestSavings: number;
   bestSavingsPercent: number;
   avgSavings: number;
+  comparisonSource: "wise_comparison_api" | "live_fx_estimate" | "mixed";
+  generatedAt: string;
 }
 
-  // Traditional provider fee structures (realistic approximations)
+type ProviderEstimateConfig = {
+  fixedFee: { [corridor: string]: number };
+  feePercent: number;
+  rateMarkup: number;
+  deliveryTime: string;
+  aliases: string[];
+};
 
-const PROVIDER_FEES: {
-  [provider: string]: {
-    fixedFee: { [corridor: string]: number };
-    feePercent: number;
-    rateMarkup: number;
-    deliveryTime: string;
-  };
-} = {
+type WiseComparisonQuote = {
+  provider?: string;
+  providerName?: string;
+  providerAlias?: string;
+  name?: string;
+  sourceCountry?: string;
+  targetCountry?: string;
+  fee?: number;
+  totalFee?: number;
+  transferFee?: number;
+  rate?: number;
+  exchangeRate?: number;
+  receiveAmount?: number;
+  targetAmount?: number;
+  deliveryTime?: string;
+  deliveryEstimate?: string;
+  collectedAt?: string;
+};
+
+type WiseComparisonProvider = {
+  alias?: string;
+  name?: string;
+  quotes?: WiseComparisonQuote[];
+};
+
+type WiseComparisonResponse = {
+  quotes?: WiseComparisonQuote[];
+  providers?: WiseComparisonProvider[];
+};
+
+const PROVIDER_ESTIMATES: Record<string, ProviderEstimateConfig> = {
   "Western Union": {
     fixedFee: {
       "US-PH": 5,
@@ -329,15 +88,14 @@ const PROVIDER_FEES: {
       "US-GH": 7,
       "US-IN": 5,
       "US-MX": 4.99,
-
       default: 7.99,
     },
     feePercent: 0,
-    rateMarkup: 3.5,// 3.5% worse than mid-market
+    rateMarkup: 3.5,
     deliveryTime: "1-3 business days",
+    aliases: ["westernunion", "western union"],
   },
-
-  "Wise": {
+  Wise: {
     fixedFee: {
       "US-PH": 1.5,
       "US-NG": 2,
@@ -352,9 +110,9 @@ const PROVIDER_FEES: {
     feePercent: 0.65,
     rateMarkup: 0.5,
     deliveryTime: "1-2 business days",
+    aliases: ["wise", "transferwise"],
   },
-
-  "MoneyGram": {
+  MoneyGram: {
     fixedFee: {
       "US-PH": 4.99,
       "US-NG": 6.99,
@@ -369,9 +127,9 @@ const PROVIDER_FEES: {
     feePercent: 0,
     rateMarkup: 3,
     deliveryTime: "1-3 business days",
+    aliases: ["moneygram", "money gram"],
   },
-
-  "Remitly": {
+  Remitly: {
     fixedFee: {
       "US-PH": 1.99,
       "US-NG": 3.99,
@@ -383,71 +141,366 @@ const PROVIDER_FEES: {
     feePercent: 0,
     rateMarkup: 1.5,
     deliveryTime: "1-2 business days",
+    aliases: ["remitly"],
   },
 };
 
-function getCorridorCode(sendCurrency: string, receiveCountry: string): string {
-  const currencyToCountry: { [c: string]: string } = {
-    USD: "US",
-    EUR: "EU",
-    GBP: "GB",
-    BRL: "BR",
-  };
+const RECEIVE_CURRENCY_BY_COUNTRY: Record<string, string> = {
+  PH: "PHP",
+  NG: "NGN",
+  KE: "KES",
+  BR: "BRL",
+  CO: "COP",
+  GH: "GHS",
+  IN: "INR",
+  MX: "MXN",
+  SN: "XOF",
+  CI: "XOF",
+};
 
-  const from = currencyToCountry[sendCurrency] || "US";
+const SEND_COUNTRY_BY_CURRENCY: Record<string, string> = {
+  USD: "US",
+  GBP: "GB",
+  BRL: "BR",
+};
 
-  return `${from}-${receiveCountry}`;
-}
-
-function getReceiveCurrency(country: string): string {
-  const map: { [c: string]: string } = {
-    PH: "PHP",
-    NG: "NGN",
-    KE: "KES",
-    BR: "BRL",
-    CO: "COP",
-    GH: "GHS",
-    IN: "INR",
-    MX: "MXN",
-    SN: "XOF",
-    CI: "XOF",
-  };
-
-  return map[country] || "USD";
-}
-
-function round(num: number) {
+function round(num: number): number {
   return Math.round(num * 100) / 100;
 }
 
-export function compareFees(
+function getCorridorCode(sendCurrency: string, receiveCountry: string): string {
+  const source = SEND_COUNTRY_BY_CURRENCY[sendCurrency] || sendCurrency;
+  return `${source}-${receiveCountry}`;
+}
+
+function getReceiveCurrency(country: string): string {
+  return RECEIVE_CURRENCY_BY_COUNTRY[country] || "USD";
+}
+
+function getWiseApiBaseUrl(): string {
+  return (process.env.WISE_API_URL || "https://api.wise.com").replace(/\/$/, "");
+}
+
+function normalizeProviderName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function formatDeliveryLabel(raw?: string): string {
+  if (!raw) return "Varies";
+  if (/^PT/i.test(raw)) {
+    const hours = raw.match(/(\d+)H/i)?.[1];
+    const minutes = raw.match(/(\d+)M/i)?.[1];
+    if (hours && minutes) return `${hours}h ${minutes}m`;
+    if (hours) return `${hours} hours`;
+    if (minutes) return `${minutes} minutes`;
+  }
+  return raw;
+}
+
+function formatComparisonSource(
+  source: FeeComparison["comparisonSource"],
+): string {
+  switch (source) {
+    case "wise_comparison_api":
+      return "live provider quotes";
+    case "mixed":
+      return "live provider quotes + fallback estimates";
+    default:
+      return "live FX-based estimates";
+  }
+}
+
+function addSavings(provider: ProviderFees, celoReceiveAmount: number): ProviderFees {
+  const savings = celoReceiveAmount - provider.receiveAmount;
+  const savingsPercent =
+    provider.receiveAmount > 0 ? (savings / provider.receiveAmount) * 100 : 0;
+
+  return {
+    ...provider,
+    savings: round(savings),
+    savingsPercent: round(savingsPercent),
+  };
+}
+
+function buildEstimatedProviderQuote(params: {
+  provider: string;
+  config: ProviderEstimateConfig;
+  amount: number;
+  sendCurrency: string;
+  receiveCurrency: string;
+  corridor: string;
+  midMarketRate: number;
+}): ProviderFees {
+  const { provider, config, amount, sendCurrency, receiveCurrency, corridor, midMarketRate } =
+    params;
+  const fixedFee = config.fixedFee[corridor] ?? config.fixedFee.default;
+  const percentFee = amount * (config.feePercent / 100);
+  const totalFee = fixedFee + percentFee;
+  const providerRate = midMarketRate * (1 - config.rateMarkup / 100);
+  const receiveAmount = (amount - totalFee) * providerRate;
+
+  return {
+    provider,
+    sendAmount: amount,
+    sendCurrency,
+    receiveAmount: round(receiveAmount),
+    receiveCurrency,
+    exchangeRate: providerRate,
+    transferFee: round(totalFee),
+    totalCost: round(totalFee),
+    estimatedDelivery: config.deliveryTime,
+    dataSource: "live_fx_estimate",
+    quoteType: "estimated",
+  };
+}
+
+function selectBestWiseQuote(
+  quotes: WiseComparisonQuote[],
+  aliases: string[],
+  targetCountry: string,
+  sourceCountry?: string,
+): WiseComparisonQuote | null {
+  const normalizedAliases = aliases.map(normalizeProviderName);
+  const matches = quotes.filter((quote) => {
+    const names = [
+      quote.provider,
+      quote.providerName,
+      quote.providerAlias,
+      quote.name,
+    ]
+      .filter(Boolean)
+      .map((value) => normalizeProviderName(value as string));
+    return names.some((name) =>
+      normalizedAliases.some((alias) => name === alias || name.includes(alias)),
+    );
+  });
+
+  if (matches.length === 0) return null;
+
+  matches.sort((a, b) => {
+    const aScore =
+      (a.targetCountry === targetCountry ? 4 : 0) +
+      (sourceCountry && a.sourceCountry === sourceCountry ? 2 : 0) +
+      (typeof a.receiveAmount === "number" || typeof a.targetAmount === "number" ? 1 : 0);
+    const bScore =
+      (b.targetCountry === targetCountry ? 4 : 0) +
+      (sourceCountry && b.sourceCountry === sourceCountry ? 2 : 0) +
+      (typeof b.receiveAmount === "number" || typeof b.targetAmount === "number" ? 1 : 0);
+    return bScore - aScore;
+  });
+
+  return matches[0];
+}
+
+async function fetchWiseComparisonQuotes(params: {
+  amount: number;
+  sendCurrency: string;
+  receiveCurrency: string;
+  targetCountry: string;
+  sourceCountry?: string;
+}): Promise<WiseComparisonQuote[]> {
+  const timeout = Number(process.env.WISE_COMPARE_TIMEOUT_MS || 8000);
+  const url = `${getWiseApiBaseUrl()}/v4/comparisons`;
+
+  const response = await axios.get<WiseComparisonResponse | WiseComparisonProvider[]>(url, {
+    params: {
+      sourceAmount: params.amount,
+      sourceCurrency: params.sendCurrency,
+      targetCurrency: params.receiveCurrency,
+      targetCountry: params.targetCountry,
+      sourceCountry: params.sourceCountry,
+      includeWise: true,
+      excludePartners: true,
+      providerTypes: "moneytransferprovider",
+    },
+    timeout,
+  });
+
+  const data = response.data;
+  if (Array.isArray(data)) {
+    return data.flatMap((provider) =>
+      (provider.quotes || []).map((quote) => ({
+        ...quote,
+        providerAlias: quote.providerAlias || provider.alias,
+        providerName: quote.providerName || provider.name,
+      })),
+    );
+  }
+
+  if (Array.isArray(data?.quotes)) return data.quotes;
+  if (Array.isArray(data?.providers)) {
+    return data.providers.flatMap((provider) =>
+      (provider.quotes || []).map((quote) => ({
+        ...quote,
+        providerAlias: quote.providerAlias || provider.alias,
+        providerName: quote.providerName || provider.name,
+      })),
+    );
+  }
+  return [];
+}
+
+function buildWiseLiveProviderQuote(params: {
+  provider: string;
+  quote: WiseComparisonQuote;
+  amount: number;
+  sendCurrency: string;
+  receiveCurrency: string;
+}): ProviderFees | null {
+  const { provider, quote, amount, sendCurrency, receiveCurrency } = params;
+  const receiveAmount = quote.receiveAmount ?? quote.targetAmount;
+  const exchangeRate = quote.exchangeRate ?? quote.rate;
+  const transferFee = quote.totalFee ?? quote.transferFee ?? quote.fee;
+
+  if (
+    typeof receiveAmount !== "number" ||
+    !Number.isFinite(receiveAmount) ||
+    receiveAmount <= 0 ||
+    typeof exchangeRate !== "number" ||
+    !Number.isFinite(exchangeRate) ||
+    exchangeRate <= 0
+  ) {
+    return null;
+  }
+
+  const resolvedFee =
+    typeof transferFee === "number" && Number.isFinite(transferFee)
+      ? transferFee
+      : Math.max(0, amount - receiveAmount / exchangeRate);
+
+  return {
+    provider,
+    sendAmount: amount,
+    sendCurrency,
+    receiveAmount: round(receiveAmount),
+    receiveCurrency,
+    exchangeRate,
+    transferFee: round(resolvedFee),
+    totalCost: round(resolvedFee),
+    estimatedDelivery: formatDeliveryLabel(
+      quote.deliveryEstimate || quote.deliveryTime,
+    ),
+    dataSource: "wise_comparison_api",
+    quoteType: "live_estimate",
+    collectedAt: quote.collectedAt,
+    providerAlias:
+      quote.providerAlias || quote.provider || quote.providerName || quote.name,
+  };
+}
+
+async function buildTraditionalProviders(params: {
+  amount: number;
+  sendCurrency: string;
+  receiveCountry: string;
+  receiveCurrency: string;
+  midMarketRate: number;
+  celoReceiveAmount: number;
+  corridor: string;
+}): Promise<{
+  providers: ProviderFees[];
+  comparisonSource: FeeComparison["comparisonSource"];
+}> {
+  const {
+    amount,
+    sendCurrency,
+    receiveCountry,
+    receiveCurrency,
+    midMarketRate,
+    celoReceiveAmount,
+    corridor,
+  } = params;
+
+  const sourceCountry = SEND_COUNTRY_BY_CURRENCY[sendCurrency];
+  let wiseQuotes: WiseComparisonQuote[] = [];
+
+  try {
+    wiseQuotes = await fetchWiseComparisonQuotes({
+      amount,
+      sendCurrency,
+      receiveCurrency,
+      targetCountry: receiveCountry,
+      sourceCountry,
+    });
+  } catch (error) {
+    console.warn("[FeeComparison] Failed to fetch Wise comparison quotes:", error);
+  }
+
+  let hasLiveQuotes = false;
+  let hasEstimatedQuotes = false;
+
+  const providers = Object.entries(PROVIDER_ESTIMATES).map(([provider, config]) => {
+    const liveQuote = selectBestWiseQuote(
+      wiseQuotes,
+      config.aliases,
+      receiveCountry,
+      sourceCountry,
+    );
+
+    const resolved =
+      liveQuote &&
+      buildWiseLiveProviderQuote({
+        provider,
+        quote: liveQuote,
+        amount,
+        sendCurrency,
+        receiveCurrency,
+      });
+
+    if (resolved) {
+      hasLiveQuotes = true;
+      return addSavings(resolved, celoReceiveAmount);
+    }
+
+    hasEstimatedQuotes = true;
+    return addSavings(
+      buildEstimatedProviderQuote({
+        provider,
+        config,
+        amount,
+        sendCurrency,
+        receiveCurrency,
+        corridor,
+        midMarketRate,
+      }),
+      celoReceiveAmount,
+    );
+  });
+
+  providers.sort((a, b) => a.receiveAmount - b.receiveAmount);
+
+  const comparisonSource =
+    hasLiveQuotes && hasEstimatedQuotes
+      ? "mixed"
+      : hasLiveQuotes
+        ? "wise_comparison_api"
+        : "live_fx_estimate";
+
+  return { providers, comparisonSource };
+}
+
+export async function compareFees(
   amount: number,
   sendCurrency: string,
-  receiveCountry: string
-): FeeComparison {
-
+  receiveCountry: string,
+): Promise<FeeComparison> {
   if (amount <= 0) {
     throw new Error("Amount must be greater than 0");
   }
 
   const receiveCurrency = getReceiveCurrency(receiveCountry);
   const ratePair = `${sendCurrency}-${receiveCurrency}`;
-
-  const midMarketRate = getFxRate(sendCurrency, receiveCurrency);
+  const midMarketRate = await getRateOrFetch(sendCurrency, receiveCurrency);
 
   if (!midMarketRate) {
     throw new Error(`Unsupported currency pair: ${ratePair}`);
   }
 
   const corridor = getCorridorCode(sendCurrency, receiveCountry);
-
-  /* CELO FEES */
+  const generatedAt = new Date().toISOString();
 
   const celoFeePercent = 0.3;
   const celoRate = midMarketRate * (1 - 0.002);
-
   const celoTransferFee = amount * (celoFeePercent / 100);
-
   const celoReceiveAmount = (amount - celoTransferFee) * celoRate;
 
   const celoFees: ProviderFees = {
@@ -460,59 +513,31 @@ export function compareFees(
     transferFee: round(celoTransferFee),
     totalCost: round(celoTransferFee),
     estimatedDelivery: "< 5 seconds",
+    dataSource: "live_fx_estimate",
+    quoteType: "live_estimate",
+    collectedAt: generatedAt,
   };
 
-  const traditionalProviders: ProviderFees[] = [];
+  const {
+    providers: traditionalProviders,
+    comparisonSource,
+  } = await buildTraditionalProviders({
+    amount,
+    sendCurrency,
+    receiveCountry,
+    receiveCurrency,
+    midMarketRate,
+    celoReceiveAmount,
+    corridor,
+  });
 
-  for (const [providerName, config] of Object.entries(PROVIDER_FEES)) {
-
-    const fixedFee = config.fixedFee[corridor] ?? config.fixedFee["default"];
-
-    const percentFee = amount * (config.feePercent / 100);
-
-    const totalFee = fixedFee + percentFee;
-
-    const providerRate = midMarketRate * (1 - config.rateMarkup / 100);
-
-    const receiveAmount = (amount - totalFee) * providerRate;
-
-    const savings = celoReceiveAmount - receiveAmount;
-
-    const savingsPercent =
-      receiveAmount > 0 ? (savings / receiveAmount) * 100 : 0;
-
-    traditionalProviders.push({
-      provider: providerName,
-      sendAmount: amount,
-      sendCurrency,
-      receiveAmount: round(receiveAmount),
-      receiveCurrency,
-      exchangeRate: providerRate,
-      transferFee: round(totalFee),
-      totalCost: round(totalFee),
-      estimatedDelivery: config.deliveryTime,
-      savings: round(savings),
-      savingsPercent: round(savingsPercent),
-    });
-  }
-
-  traditionalProviders.sort(
-    (a, b) => a.receiveAmount - b.receiveAmount
-  );
-
-  const bestSavings = Math.max(
-    ...traditionalProviders.map((p) => p.savings || 0)
-  );
-
+  const bestSavings = Math.max(...traditionalProviders.map((p) => p.savings || 0));
   const bestSavingsPercent = Math.max(
-    ...traditionalProviders.map((p) => p.savingsPercent || 0)
+    ...traditionalProviders.map((p) => p.savingsPercent || 0),
   );
-
   const avgSavings =
-    traditionalProviders.reduce(
-      (sum, p) => sum + (p.savings || 0),
-      0
-    ) / traditionalProviders.length;
+    traditionalProviders.reduce((sum, p) => sum + (p.savings || 0), 0) /
+    traditionalProviders.length;
 
   return {
     corridor,
@@ -524,14 +549,15 @@ export function compareFees(
     bestSavings: round(bestSavings),
     bestSavingsPercent: round(bestSavingsPercent),
     avgSavings: round(avgSavings),
+    comparisonSource,
+    generatedAt,
   };
 }
 
 export function formatFeeComparison(
   comparison: FeeComparison,
-  lang: string = "en"
+  lang: string = "en",
 ): string {
-
   const {
     corridor,
     celoFees,
@@ -539,31 +565,34 @@ export function formatFeeComparison(
     sendAmount,
     sendCurrency,
     receiveCurrency,
+    comparisonSource,
   } = comparison;
 
   let output = `💰 Fee Comparison\n`;
   output += `Corridor: ${corridor}\n`;
-  output += `You send: ${sendAmount} ${sendCurrency}\n\n`;
+  output += `You send: ${sendAmount} ${sendCurrency}\n`;
+  output += `Source: ${formatComparisonSource(comparisonSource)}\n\n`;
 
   output += `🟢 ${celoFees.provider} (Recommended)\n`;
   output += `Receive: ${celoFees.receiveAmount.toLocaleString()} ${receiveCurrency}\n`;
   output += `Fee: $${celoFees.transferFee}\n`;
   output += `Rate: 1 ${sendCurrency} = ${celoFees.exchangeRate.toFixed(
-    2
+    2,
   )} ${receiveCurrency}\n`;
   output += `Delivery: ${celoFees.estimatedDelivery}\n\n`;
 
-  for (const p of traditionalProviders) {
-    output += `🔴 ${p.provider}\n`;
-    output += `Receive: ${p.receiveAmount.toLocaleString()} ${receiveCurrency}\n`;
-    output += `Fee: $${p.transferFee}\n`;
-    output += `Rate: 1 ${sendCurrency} = ${p.exchangeRate.toFixed(
-      2
+  for (const provider of traditionalProviders) {
+    output += `🔴 ${provider.provider}\n`;
+    output += `Receive: ${provider.receiveAmount.toLocaleString()} ${receiveCurrency}\n`;
+    output += `Fee: $${provider.transferFee}\n`;
+    output += `Rate: 1 ${sendCurrency} = ${provider.exchangeRate.toFixed(
+      2,
     )} ${receiveCurrency}\n`;
-    output += `Delivery: ${p.estimatedDelivery}\n`;
+    output += `Delivery: ${provider.estimatedDelivery}\n`;
+    output += `Quote: ${provider.quoteType || "estimated"}\n`;
 
-    if (p.savings && p.savings > 0) {
-      output += `You save: ${p.savings.toLocaleString()} ${receiveCurrency}\n`;
+    if (provider.savings && provider.savings > 0) {
+      output += `You save: ${provider.savings.toLocaleString()} ${receiveCurrency}\n`;
     }
 
     output += "\n";
