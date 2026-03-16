@@ -4,7 +4,7 @@
  */
 
 export interface RemittanceIntent {
-  action: 'send' | 'check_balance' | 'history' | 'compare_fees' | 'schedule' | 'cancel' | 'help' | 'wallet';
+  action: 'send' | 'check_balance' | 'history' | 'compare_fees' | 'schedule' | 'cancel' | 'help' | 'wallet' | 'swap';
   amount?: string;
   recipientCountry?: string;
   recipientName?: string;
@@ -21,6 +21,7 @@ export interface RemittanceIntent {
 const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
   en: {
     send: ['send', 'transfer', 'pay', 'wire', 'remit', 'transmit'],
+    swap: ['swap', 'exchange', 'convert', 'trade'],
     check_balance: ['balance', 'how much', 'funds', 'available'],
     wallet: ['wallet', 'address', 'my address', 'my wallet'],
     history: ['history', 'transactions', 'past', 'previous', 'records', 'receipts'],
@@ -31,6 +32,7 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
   },
   es: {
     send: ['enviar', 'envía', 'transferir', 'mandar', 'pagar', 'girar'],
+    swap: ['cambiar', 'intercambiar', 'convertir', 'swap'],
     check_balance: ['saldo', 'cuánto', 'fondos', 'disponible'],
     wallet: ['billetera', 'cartera', 'mi dirección', 'mi wallet'],
     history: ['historial', 'transacciones', 'pasadas', 'anteriores', 'recibos'],
@@ -41,6 +43,7 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
   },
   pt: {
     send: ['enviar', 'envie', 'transferir', 'mandar', 'pagar', 'remeter'],
+    swap: ['trocar', 'intercambiar', 'converter', 'swap'],
     check_balance: ['saldo', 'quanto', 'fundos', 'disponível'],
     wallet: ['carteira', 'meu endereço', 'minha carteira'],
     history: ['histórico', 'transações', 'passadas', 'anteriores', 'recibos'],
@@ -51,6 +54,7 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
   },
   fr: {
     send: ['envoyer', 'envoie', 'transférer', 'payer', 'virer', 'expédier'],
+    swap: ['échanger', 'convertir', 'swap'],
     check_balance: ['solde', 'combien', 'fonds', 'disponible'],
     wallet: ['portefeuille', 'mon adresse'],
     history: ['historique', 'transactions', 'passées', 'précédentes', 'reçus'],
@@ -111,6 +115,18 @@ const CURRENCY_KEYWORDS: { [key: string]: string } = {
   'real': 'BRL', 'reais': 'BRL', 'brl': 'BRL',
   'franc': 'XOF', 'francs': 'XOF', 'cfa': 'XOF', 'xof': 'XOF',
   'celo': 'CELO', 'celos': 'CELO', 'cgld': 'CELO',
+};
+
+const TOKEN_KEYWORDS: { [key: string]: string } = {
+  'cusd': 'cUSD',
+  'ceur': 'cEUR',
+  'usdm': 'USDm',
+  'eurm': 'EURm',
+  'brlm': 'BRLm',
+  'copm': 'COPm',
+  'xofm': 'XOFm',
+  'creal': 'cREAL',
+  'celo': 'CELO',
 };
 
 const RELATIONSHIP_KEYWORDS: { [lang: string]: string[] } = {
@@ -198,29 +214,48 @@ export function parseRemittanceIntent(userInput: string): RemittanceIntent {
     }
   }
 
-  // Extract source currency
+  // Extract source and target currencies (including stablecoin symbols)
   let sourceCurrency: string | undefined;
-  const currencySymbolMatch = input.match(/([\$€£])/);
-  if (currencySymbolMatch) {
-    sourceCurrency = CURRENCY_KEYWORDS[currencySymbolMatch[1]];
+  let targetCurrency: string | undefined;
+  const currencyHits: { idx: number; code: string }[] = [];
+  const combinedMap: { [key: string]: string } = { ...CURRENCY_KEYWORDS, ...TOKEN_KEYWORDS };
+
+  const symbolRegex = /[\$€£]/g;
+  let symbolMatch: RegExpExecArray | null;
+  while ((symbolMatch = symbolRegex.exec(input)) !== null) {
+    const code = CURRENCY_KEYWORDS[symbolMatch[0]];
+    if (code) currencyHits.push({ idx: symbolMatch.index, code });
+  }
+
+  const tokenKeys = Object.keys(combinedMap)
+    .filter((k) => /^[a-z0-9]+$/i.test(k) && k.length > 1)
+    .sort((a, b) => b.length - a.length);
+  const tokenPattern = new RegExp(`\\b(${tokenKeys.join('|')})\\b`, 'gi');
+  let tokenMatch: RegExpExecArray | null;
+  while ((tokenMatch = tokenPattern.exec(input)) !== null) {
+    const key = tokenMatch[1].toLowerCase();
+    const code = combinedMap[key];
+    if (code) currencyHits.push({ idx: tokenMatch.index, code });
+  }
+
+  currencyHits.sort((a, b) => a.idx - b.idx);
+  const orderedCodes = Array.from(new Set(currencyHits.map((h) => h.code)));
+
+  if (orderedCodes.length >= 1) {
+    sourceCurrency = orderedCodes[0];
     confidence += 0.1;
-  } else {
-    for (const [keyword, code] of Object.entries(CURRENCY_KEYWORDS)) {
-      if (keyword.length > 1 && input.includes(keyword)) {
-        sourceCurrency = code;
-        confidence += 0.1;
-        break;
-      }
-    }
+  }
+  if (orderedCodes.length >= 2) {
+    targetCurrency = orderedCodes[1];
+    confidence += 0.1;
   }
 
   // Extract recipient country & target currency
   let recipientCountry: string | undefined;
-  let targetCurrency: string | undefined;
   for (const [keyword, info] of Object.entries(COUNTRY_KEYWORDS)) {
     if (input.includes(keyword)) {
       recipientCountry = info.code;
-      targetCurrency = info.targetCurrency;
+      if (!targetCurrency) targetCurrency = info.targetCurrency;
       confidence += 0.2;
       break;
     }
@@ -278,7 +313,11 @@ export function parseRemittanceIntent(userInput: string): RemittanceIntent {
 
   // If no explicit action detected, treat as greeting/help unless it's clearly a send intent
   if (!actionDetected) {
-    if (amount || recipientCountry || recipientAddress || sourceCurrency) {
+    const hasCurrencyPair = Boolean(sourceCurrency && targetCurrency && sourceCurrency !== targetCurrency);
+    if (amount && hasCurrencyPair) {
+      action = 'swap';
+      confidence = Math.max(confidence, 0.2);
+    } else if (amount || recipientCountry || recipientAddress || sourceCurrency) {
       action = 'send';
       confidence = Math.max(confidence, 0.2);
     } else {
@@ -293,7 +332,7 @@ export function parseRemittanceIntent(userInput: string): RemittanceIntent {
     recipientCountry,
     recipientName,
     recipientAddress,
-    sourceCurrency: sourceCurrency || 'USD',
+    sourceCurrency: sourceCurrency || (action === 'swap' ? undefined : 'USD'),
     targetCurrency,
     frequency,
     confidence: Math.min(confidence, 1),

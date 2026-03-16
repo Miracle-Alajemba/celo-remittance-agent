@@ -36,7 +36,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ScheduledTransfer = exports.Transaction = exports.User = void 0;
+exports.ScheduledTransfer = exports.ConversationMessage = exports.Transaction = exports.User = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
 const userSchema = new mongoose_1.Schema({
     userId: { type: String, required: true, unique: true, index: true },
@@ -77,6 +77,14 @@ const transactionSchema = new mongoose_1.Schema({
     createdAt: { type: Date, default: Date.now, index: true },
     updatedAt: { type: Date, default: Date.now },
 });
+const conversationMessageSchema = new mongoose_1.Schema({
+    userId: { type: String, required: true, index: true },
+    role: { type: String, required: true, enum: ['user', 'agent'] },
+    content: { type: String, required: true },
+    timestamp: { type: Date, default: Date.now, index: true },
+    intent: { type: mongoose_1.Schema.Types.Mixed },
+    metadata: { type: mongoose_1.Schema.Types.Mixed },
+});
 const scheduledTransferSchema = new mongoose_1.Schema({
     userId: { type: String, required: true, index: true },
     recipientAddress: { type: String, required: true },
@@ -97,9 +105,10 @@ const scheduledTransferSchema = new mongoose_1.Schema({
     updatedAt: { type: Date, default: Date.now },
 });
 // Create indexes for better query performance
-userSchema.index({ userId: 1 });
 transactionSchema.index({ userId: 1, createdAt: -1 });
 scheduledTransferSchema.index({ userId: 1, status: 1 });
+conversationMessageSchema.index({ userId: 1, timestamp: -1 });
 exports.User = mongoose_1.default.model('User', userSchema);
 exports.Transaction = mongoose_1.default.model('Transaction', transactionSchema);
+exports.ConversationMessage = mongoose_1.default.model('ConversationMessage', conversationMessageSchema);
 exports.ScheduledTransfer = mongoose_1.default.model('ScheduledTransfer', scheduledTransferSchema);

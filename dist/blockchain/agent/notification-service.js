@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.sendSMSNotification = sendSMSNotification;
 exports.sendWhatsAppNotification = sendWhatsAppNotification;
 exports.notifyTransferComplete = notifyTransferComplete;
+exports.notifyTransferFailed = notifyTransferFailed;
 /**
  * Notification Service
  * Handles SMS/WhatsApp notifications via Twilio
@@ -167,6 +168,18 @@ async function notifyTransferComplete(payload, channels = ['sms']) {
         }
         else if (channel === 'whatsapp') {
             results.push(await sendWhatsAppNotification(payload, 'transfer_sent'));
+        }
+    }
+    return results;
+}
+async function notifyTransferFailed(payload, channels = ['sms']) {
+    const results = [];
+    for (const channel of channels) {
+        if (channel === 'sms') {
+            results.push(await sendSMSNotification(payload, 'transfer_failed'));
+        }
+        else if (channel === 'whatsapp') {
+            results.push(await sendWhatsAppNotification(payload, 'transfer_failed'));
         }
     }
     return results;

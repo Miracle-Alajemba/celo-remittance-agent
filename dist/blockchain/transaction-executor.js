@@ -43,17 +43,39 @@ exports.getWalletBalance = getWalletBalance;
 exports.getAllWalletBalances = getAllWalletBalances;
 const ethers_1 = require("ethers");
 const celo_provider_1 = require("./celo/celo-provider");
+const mento_integration_1 = require("./mento/mento-integration");
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
 const STABLECOIN_ADDRESSES = {
     USDm: '0x520b294f93c80aE2d195763E42645cD82F70e1e8',
-    EUR: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
+    EURm: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
     BRLm: '0x25F93d1a8F4d2C3b3F4cBf55f5B8E97C3E9fA3BB',
     COPm: '0x3F2D6B2E4cD3f5a6B7c8D9e0F1A2B3C4D5E6F7A8',
     XOFm: '0x4A3B5C6D7E8F9A0B1C2D3E4F5A6B7C8D9E0F1A2B',
     cUSD: '0x874069Fa1Eb16D44d622F2e0Ca25eeA172369bC1',
     cEUR: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
+    cREAL: '0xE4D517785D091D3c54818832dB6094bcc2744545',
 };
+const SYMBOL_ALIASES = {
+    USD: 'cUSD',
+    EUR: 'cEUR',
+    BRL: 'BRLm',
+    COP: 'COPm',
+    XOF: 'XOFm',
+};
+async function resolveTokenAddress(symbol) {
+    const normalized = SYMBOL_ALIASES[symbol] || symbol;
+    const direct = STABLECOIN_ADDRESSES[normalized] ||
+        STABLECOIN_ADDRESSES[normalized.toUpperCase()];
+    if (direct)
+        return direct;
+    try {
+        return await (0, mento_integration_1.getStablecoinAddress)(normalized);
+    }
+    catch {
+        return null;
+    }
+}
 const ERC20_ABI = [
     'function transfer(address to, uint256 amount) public returns (bool)',
     'function balanceOf(address account) public view returns (uint256)',
@@ -74,18 +96,64 @@ async function executeBlockchainTransfer(request) {
                 status: 'failed',
             };
         }
-        const tokenAddress = STABLECOIN_ADDRESSES[request.currency];
+        const currencyInput = (request.currency || '').trim();
+        const currencyLower = currencyInput.toLowerCase();
+        // Native CELO transfer
+        if (currencyLower === 'celo' || currencyLower === 'cgld') {
+            const walletAddress = await celo_provider_1.celoProvider.getWalletAddress();
+            const balance = await celo_provider_1.celoProvider.provider.getBalance(walletAddress);
+            const amountToSend = ethers_1.ethers.parseEther(request.amount);
+            if (balance < amountToSend) {
+                const balanceFormatted = ethers_1.ethers.formatEther(balance);
+                return {
+                    success: false,
+                    error: `Insufficient balance. Available: ${balanceFormatted} CELO, Required: ${request.amount}`,
+                    status: 'failed',
+                };
+            }
+            const tx = await celo_provider_1.celoProvider.wallet.sendTransaction({
+                to: request.recipient,
+                value: amountToSend,
+            });
+            let timeoutId;
+            const timeoutPromise = new Promise((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error('Transaction confirmation timeout')), 60000);
+            });
+            const receipt = await Promise.race([
+                tx.wait().finally(() => clearTimeout(timeoutId)),
+                timeoutPromise
+            ]);
+            if (!receipt) {
+                return {
+                    success: false,
+                    txHash: tx.hash,
+                    error: 'Transaction receipt is null',
+                    status: 'pending',
+                };
+            }
+            const isSuccess = receipt.status === 1;
+            return {
+                success: isSuccess,
+                txHash: tx.hash,
+                blockNumber: receipt.blockNumber,
+                gasUsed: receipt.gasUsed?.toString(),
+                status: isSuccess ? 'confirmed' : 'failed',
+                error: isSuccess ? undefined : 'Transaction failed on blockchain',
+            };
+        }
+        const tokenAddress = await resolveTokenAddress(currencyInput);
         if (!tokenAddress) {
             return {
                 success: false,
-                error: `Unsupported currency: ${request.currency}. Supported: ${Object.keys(STABLECOIN_ADDRESSES).join(', ')}`,
+                error: `Unsupported currency: ${request.currency}. Supported: CELO, ${Object.keys(STABLECOIN_ADDRESSES).join(', ')}`,
                 status: 'failed',
             };
         }
         // Get wallet address
         const walletAddress = await celo_provider_1.celoProvider.getWalletAddress();
         // Create contract instance
-        const contract = celo_provider_1.celoProvider.getContract(tokenAddress, ERC20_ABI);
+        const checksumAddress = ethers_1.ethers.getAddress(tokenAddress);
+        const contract = celo_provider_1.celoProvider.getContract(checksumAddress, ERC20_ABI);
         // Check sender balance
         const balance = await contract.balanceOf(walletAddress);
         const decimals = await contract.decimals();
@@ -179,15 +247,15 @@ async function verifyTransactionStatus(txHash) {
 /**
  * Get wallet balance for a specific currency
  */
-async function getWalletBalance(currency) {
+async function getWalletBalance(currency, walletAddress) {
     try {
-        const tokenAddress = STABLECOIN_ADDRESSES[currency];
+        const tokenAddress = await resolveTokenAddress(currency);
         if (!tokenAddress) {
             return null;
         }
-        const walletAddress = await celo_provider_1.celoProvider.getWalletAddress();
-        const contract = celo_provider_1.celoProvider.getContract(tokenAddress, ERC20_ABI);
-        const balance = await contract.balanceOf(walletAddress);
+        const targetAddress = walletAddress || await celo_provider_1.celoProvider.getWalletAddress();
+        const contract = celo_provider_1.celoProvider.getContract(ethers_1.ethers.getAddress(tokenAddress), ERC20_ABI);
+        const balance = await contract.balanceOf(targetAddress);
         const decimals = await contract.decimals();
         const formatted = ethers_1.ethers.formatUnits(balance, decimals);
         return {
@@ -204,11 +272,20 @@ async function getWalletBalance(currency) {
 /**
  * Get all wallet balances
  */
-async function getAllWalletBalances() {
+async function getAllWalletBalances(walletAddress) {
     const balances = {};
+    const targetAddress = walletAddress || await celo_provider_1.celoProvider.getWalletAddress();
+    // Native CELO balance
+    try {
+        const celoBalance = await celo_provider_1.celoProvider.provider.getBalance(targetAddress);
+        balances['CELO'] = ethers_1.ethers.formatEther(celoBalance);
+    }
+    catch (error) {
+        balances['CELO'] = '0';
+    }
     for (const [currency] of Object.entries(STABLECOIN_ADDRESSES)) {
         try {
-            const result = await getWalletBalance(currency);
+            const result = await getWalletBalance(currency, targetAddress);
             if (result) {
                 balances[currency] = result.formatted;
             }

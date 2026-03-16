@@ -2,15 +2,25 @@
  * Database Service Functions
  */
 
-import { User, Transaction, ScheduledTransfer, ConversationMessage } from './models';
-import { IUser, ITransaction, IScheduledTransfer, IConversationMessage } from './models';
+import {
+  User,
+  Transaction,
+  ScheduledTransfer,
+  ConversationMessage,
+} from "./models";
+import {
+  IUser,
+  ITransaction,
+  IScheduledTransfer,
+  IConversationMessage,
+} from "./models";
 
 // ==================== User Services ====================
 
 export async function findOrCreateUser(
   userId: string,
   walletAddress: string,
-  name?: string
+  name?: string,
 ): Promise<IUser> {
   let user = await User.findOne({ userId });
 
@@ -19,7 +29,7 @@ export async function findOrCreateUser(
       userId,
       walletAddress,
       name: name || `User ${userId.substring(0, 8)}`,
-      language: 'en',
+      language: "en",
       dailySpendingLimit: 500,
       monthlySpendingLimit: 5000,
     });
@@ -28,7 +38,10 @@ export async function findOrCreateUser(
   return user;
 }
 
-export async function getUserByIdOrAddress(userId?: string, walletAddress?: string): Promise<IUser | null> {
+export async function getUserByIdOrAddress(
+  userId?: string,
+  walletAddress?: string,
+): Promise<IUser | null> {
   if (userId) {
     return User.findOne({ userId });
   }
@@ -38,30 +51,38 @@ export async function getUserByIdOrAddress(userId?: string, walletAddress?: stri
   return null;
 }
 
+export async function getAllUsers(): Promise<IUser[]> {
+  return User.find({}).exec();
+}
+
 export async function updateUserProfile(
   userId: string,
-  updates: Partial<IUser>
+  updates: Partial<IUser>,
 ): Promise<IUser | null> {
   return User.findOneAndUpdate({ userId }, updates, { new: true });
 }
 
-export async function resetDailySpending(userId: string): Promise<IUser | null> {
+export async function resetDailySpending(
+  userId: string,
+): Promise<IUser | null> {
   return User.findOneAndUpdate(
     { userId },
     { dailySpent: 0, lastResetDate: new Date() },
-    { new: true }
+    { new: true },
   );
 }
 
 // ==================== Transaction Services ====================
 
-export async function createTransaction(data: Partial<ITransaction>): Promise<ITransaction> {
+export async function createTransaction(
+  data: Partial<ITransaction>,
+): Promise<ITransaction> {
   return Transaction.create(data);
 }
 
 export async function getTransactionsByUser(
   userId: string,
-  limit: number = 10
+  limit: number = 10,
 ): Promise<ITransaction[]> {
   return Transaction.find({ userId })
     .sort({ createdAt: -1 })
@@ -69,13 +90,15 @@ export async function getTransactionsByUser(
     .exec();
 }
 
-export async function getTransactionByHash(txHash: string): Promise<ITransaction | null> {
+export async function getTransactionByHash(
+  txHash: string,
+): Promise<ITransaction | null> {
   return Transaction.findOne({ txHash });
 }
 
 export async function updateTransactionStatus(
   txHash: string,
-  status: 'pending' | 'completed' | 'failed'
+  status: "pending" | "completed" | "failed",
 ): Promise<ITransaction | null> {
   return Transaction.findOneAndUpdate({ txHash }, { status }, { new: true });
 }
@@ -83,29 +106,36 @@ export async function updateTransactionStatus(
 export async function getTransactionStats(userId: string) {
   const transactions = await Transaction.find({ userId });
   const totalSent = transactions.reduce((sum, tx) => sum + tx.sendAmount, 0);
-  const totalReceived = transactions.reduce((sum, tx) => sum + tx.receiveAmount, 0);
-  const totalFees = transactions.reduce((sum, tx) => sum + (tx.swapFee || 0), 0);
+  const totalReceived = transactions.reduce(
+    (sum, tx) => sum + tx.receiveAmount,
+    0,
+  );
+  const totalFees = transactions.reduce(
+    (sum, tx) => sum + (tx.swapFee || 0),
+    0,
+  );
 
   return {
     count: transactions.length,
     totalSent,
     totalReceived,
     totalFees,
-    averageTransactionSize: transactions.length > 0 ? totalSent / transactions.length : 0,
+    averageTransactionSize:
+      transactions.length > 0 ? totalSent / transactions.length : 0,
   };
 }
 
 // ==================== Scheduled Transfer Services ====================
 
 export async function createScheduledTransferDB(
-  data: Partial<IScheduledTransfer>
+  data: Partial<IScheduledTransfer>,
 ): Promise<IScheduledTransfer> {
   return ScheduledTransfer.create(data);
 }
 
 export async function getScheduledTransfersByUser(
   userId: string,
-  status?: string
+  status?: string,
 ): Promise<IScheduledTransfer[]> {
   const query: any = { userId };
   if (status) {
@@ -114,29 +144,35 @@ export async function getScheduledTransfersByUser(
   return ScheduledTransfer.find(query).exec();
 }
 
-export async function getScheduledTransferById(id: string): Promise<IScheduledTransfer | null> {
+export async function getScheduledTransferById(
+  id: string,
+): Promise<IScheduledTransfer | null> {
   return ScheduledTransfer.findById(id);
 }
 
 export async function updateScheduledTransfer(
   id: string,
-  updates: Partial<IScheduledTransfer>
+  updates: Partial<IScheduledTransfer>,
 ): Promise<IScheduledTransfer | null> {
   return ScheduledTransfer.findByIdAndUpdate(id, updates, { new: true });
 }
 
-export async function cancelScheduledTransferDB(id: string): Promise<IScheduledTransfer | null> {
+export async function cancelScheduledTransferDB(
+  id: string,
+): Promise<IScheduledTransfer | null> {
   return ScheduledTransfer.findByIdAndUpdate(
     id,
-    { status: 'cancelled' },
-    { new: true }
+    { status: "cancelled" },
+    { new: true },
   );
 }
 
-export async function getScheduledTransfersForExecution(limit: number = 10): Promise<IScheduledTransfer[]> {
+export async function getScheduledTransfersForExecution(
+  limit: number = 10,
+): Promise<IScheduledTransfer[]> {
   const now = new Date();
   return ScheduledTransfer.find({
-    status: 'active',
+    status: "active",
     nextExecutionDate: { $lte: now },
   })
     .limit(limit)
@@ -144,12 +180,15 @@ export async function getScheduledTransfersForExecution(limit: number = 10): Pro
 }
 
 export async function insertScheduledTransferExecution(
-  scheduledTransferId: string
+  scheduledTransferId: string,
 ): Promise<IScheduledTransfer | null> {
   const transfer = await ScheduledTransfer.findById(scheduledTransferId);
   if (!transfer) return null;
 
-  const nextDate = calculateNextExecutionDate(transfer.nextExecutionDate, transfer.frequency);
+  const nextDate = calculateNextExecutionDate(
+    transfer.nextExecutionDate,
+    transfer.frequency,
+  );
 
   return ScheduledTransfer.findByIdAndUpdate(
     scheduledTransferId,
@@ -157,25 +196,27 @@ export async function insertScheduledTransferExecution(
       executionCount: transfer.executionCount + 1,
       lastExecutionDate: new Date(),
       nextExecutionDate: nextDate,
-      status: transfer.maxExecutions && transfer.executionCount + 1 >= transfer.maxExecutions
-        ? 'completed'
-        : 'active',
+      status:
+        transfer.maxExecutions &&
+        transfer.executionCount + 1 >= transfer.maxExecutions
+          ? "completed"
+          : "active",
     },
-    { new: true }
+    { new: true },
   );
 }
 
 // ==================== Conversation Services ====================
 
 export async function createConversationMessage(
-  data: Partial<IConversationMessage>
+  data: Partial<IConversationMessage>,
 ): Promise<IConversationMessage> {
   return ConversationMessage.create(data);
 }
 
 export async function getConversationHistory(
   userId: string,
-  limit: number = 50
+  limit: number = 50,
 ): Promise<IConversationMessage[]> {
   return ConversationMessage.find({ userId })
     .sort({ timestamp: -1 })
@@ -194,16 +235,19 @@ export async function clearAllDemoData(): Promise<void> {
   ]);
 }
 
-function calculateNextExecutionDate(currentDate: Date, frequency: string): Date {
+function calculateNextExecutionDate(
+  currentDate: Date,
+  frequency: string,
+): Date {
   const next = new Date(currentDate);
   switch (frequency) {
-    case 'weekly':
+    case "weekly":
       next.setDate(next.getDate() + 7);
       break;
-    case 'biweekly':
+    case "biweekly":
       next.setDate(next.getDate() + 14);
       break;
-    case 'monthly':
+    case "monthly":
       next.setMonth(next.getMonth() + 1);
       break;
   }

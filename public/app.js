@@ -22,6 +22,10 @@ const compareBtn = document.getElementById('compareBtn');
 const swapSendBtn = document.getElementById('swapSendBtn');
 const swapQuickFillBtn = document.getElementById('swapQuickFillBtn');
 const swapRefreshBalancesBtn = document.getElementById('swapRefreshBalancesBtn');
+const swapPreviewBtn = document.getElementById('swapPreviewBtn');
+const swapClearHistoryBtn = document.getElementById('swapClearHistoryBtn');
+
+const EXPLORER_BASE_URL = 'https://alfajores.celoscan.io/tx/';
 
 // ==================== Navigation ====================
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -46,6 +50,7 @@ function switchView(viewName) {
   if (viewName === 'dashboard') loadDashboard();
   if (viewName === 'history') loadHistory();
   if (viewName === 'swap') loadSwapBalances();
+  if (viewName === 'swap') renderSwapHistory();
 
   // Close mobile sidebar
   sidebar.classList.remove('mobile-open');
@@ -588,6 +593,17 @@ if (swapSendBtn) {
         localStorage.setItem('swapLastInput', inputCurrency);
         localStorage.setItem('swapLastOutput', outputCurrency);
         localStorage.setItem('swapLastAmount', inputAmount);
+        persistSwapHistory({
+          recipient,
+          inputCurrency,
+          outputCurrency,
+          inputAmount,
+          outputAmount: data.swap?.outputAmount || data.outputAmount || '',
+          swapTx: data.swap?.txHash || '',
+          transferTx: data.transfer?.txHash || '',
+          timestamp: Date.now(),
+        });
+        renderSwapHistory();
         loadSwapBalances();
       }
     } catch (error) {
@@ -598,6 +614,47 @@ if (swapSendBtn) {
     } finally {
       swapSendBtn.textContent = 'Swap & Send';
       swapSendBtn.disabled = false;
+    }
+  });
+}
+
+if (swapPreviewBtn) {
+  swapPreviewBtn.addEventListener('click', async () => {
+    const inputAmount = document.getElementById('swapInputAmount').value;
+    const inputCurrency = document.getElementById('swapInputCurrency').value;
+    const outputCurrency = document.getElementById('swapOutputCurrency').value;
+
+    if (!inputAmount || parseFloat(inputAmount) <= 0) return;
+
+    swapPreviewBtn.textContent = 'Previewing...';
+    swapPreviewBtn.disabled = true;
+    renderSwapPreview({ status: 'pending', message: 'Fetching quote...' });
+
+    try {
+      const res = await fetch(`${API_BASE}/api/swap/quote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          inputCurrency,
+          outputCurrency,
+          inputAmount,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        renderSwapPreview({ status: 'error', message: data.error || 'Failed to fetch quote' });
+      } else {
+        renderSwapPreview({
+          status: 'success',
+          message: 'Quote ready',
+          details: data,
+        });
+      }
+    } catch (error) {
+      renderSwapPreview({ status: 'error', message: 'Error calling API. Make sure the server is running.' });
+    } finally {
+      swapPreviewBtn.textContent = 'Preview Swap';
+      swapPreviewBtn.disabled = false;
     }
   });
 }
@@ -621,6 +678,13 @@ if (swapQuickFillBtn) {
 if (swapRefreshBalancesBtn) {
   swapRefreshBalancesBtn.addEventListener('click', () => {
     loadSwapBalances();
+  });
+}
+
+if (swapClearHistoryBtn) {
+  swapClearHistoryBtn.addEventListener('click', () => {
+    localStorage.removeItem('swapHistory');
+    renderSwapHistory();
   });
 }
 
@@ -694,7 +758,7 @@ function renderSwapResult(payload) {
           <span class="swap-title">${swap.txHash ? 'On-chain swap submitted' : 'Swap details'}</span>
         </div>
         <div class="swap-card-body">
-          <div class="swap-row"><span>Tx Hash</span><span class="mono">${swap.txHash || '—'}</span></div>
+          <div class="swap-row"><span>Tx Hash</span><span>${formatTxLink(swap.txHash)}</span></div>
           <div class="swap-row"><span>Block</span><span>${swap.blockNumber || '—'}</span></div>
         </div>
       </div>`;
@@ -708,7 +772,7 @@ function renderSwapResult(payload) {
           <span class="swap-title">${transfer.txHash ? 'Transfer submitted' : 'Transfer details'}</span>
         </div>
         <div class="swap-card-body">
-          <div class="swap-row"><span>Tx Hash</span><span class="mono">${transfer.txHash || '—'}</span></div>
+          <div class="swap-row"><span>Tx Hash</span><span>${formatTxLink(transfer.txHash)}</span></div>
           <div class="swap-row"><span>Block</span><span>${transfer.blockNumber || '—'}</span></div>
           <div class="swap-row"><span>Gas Used</span><span>${transfer.gasUsed || '—'}</span></div>
         </div>
@@ -716,6 +780,89 @@ function renderSwapResult(payload) {
   }
 
   container.innerHTML = html;
+}
+
+function renderSwapPreview(payload) {
+  const container = document.getElementById('swapPreview');
+  if (!container) return;
+
+  if (!payload) {
+    container.innerHTML = '<p class="empty-state">Preview will appear here</p>';
+    return;
+  }
+
+  const status = payload.status || 'info';
+  const message = payload.message || 'Swap preview';
+  const details = payload.details || {};
+
+  const statusLabel = status === 'success' ? '✅' : status === 'error' ? '❌' : '⏳';
+  const output = details.outputAmount ? `${Number(details.outputAmount).toLocaleString()} ${details.outputCurrency}` : '—';
+  const rate = details.rate ? details.rate.toFixed(6) : '—';
+  const fee = details.fee ? Number(details.fee).toFixed(4) : '—';
+
+  container.innerHTML = `
+    <div class="swap-preview-card ${status}">
+      <div class="swap-preview-header">
+        <span class="swap-preview-title">${statusLabel} ${message}</span>
+        <span class="swap-title">Mento Quote</span>
+      </div>
+      <div class="swap-card-body">
+        <div class="swap-row"><span>Output</span><span>${output}</span></div>
+        <div class="swap-row"><span>Rate</span><span>${rate}</span></div>
+        <div class="swap-row"><span>Fee</span><span>${fee}</span></div>
+        <div class="swap-row"><span>Route</span><span>${details.route || 'Mento'}</span></div>
+      </div>
+    </div>`;
+}
+
+function getSwapHistory() {
+  try {
+    const raw = localStorage.getItem('swapHistory');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed;
+  } catch {
+    return [];
+  }
+}
+
+function persistSwapHistory(entry) {
+  const history = getSwapHistory();
+  history.unshift(entry);
+  const maxItems = 10;
+  localStorage.setItem('swapHistory', JSON.stringify(history.slice(0, maxItems)));
+}
+
+function renderSwapHistory() {
+  const container = document.getElementById('swapHistory');
+  if (!container) return;
+
+  const history = getSwapHistory();
+  if (history.length === 0) {
+    container.innerHTML = '<p class="empty-state">Swap & send activity will appear here</p>';
+    return;
+  }
+
+  let html = '';
+  for (const item of history) {
+    const date = new Date(item.timestamp).toLocaleString();
+    html += `
+      <div class="history-card">
+        <div class="history-row"><span>Date</span><span>${date}</span></div>
+        <div class="history-row"><span>Recipient</span><span class="mono">${item.recipient}</span></div>
+        <div class="history-row"><span>Swap</span><span>${item.inputAmount} ${item.inputCurrency} → ${item.outputAmount || '—'} ${item.outputCurrency}</span></div>
+        <div class="history-row"><span>Swap Tx</span><span>${formatTxLink(item.swapTx)}</span></div>
+        <div class="history-row"><span>Transfer Tx</span><span>${formatTxLink(item.transferTx)}</span></div>
+      </div>`;
+  }
+  container.innerHTML = html;
+}
+
+function formatTxLink(txHash) {
+  if (!txHash) return '—';
+  const short = `${txHash.slice(0, 6)}…${txHash.slice(-4)}`;
+  return `<a class="tx-link" href="${EXPLORER_BASE_URL}${txHash}" target="_blank" rel="noopener noreferrer">${short}</a>`;
 }
 
 // ==================== History Page ====================

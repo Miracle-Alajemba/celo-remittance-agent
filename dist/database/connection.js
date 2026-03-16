@@ -41,18 +41,23 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.connectDB = connectDB;
 exports.disconnectDB = disconnectDB;
+exports.isDbConnected = isDbConnected;
 const mongoose_1 = __importDefault(require("mongoose"));
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/celo-remittance';
+const MONGODB_URI = process.env.MONGODB_URI || '';
 async function connectDB() {
     try {
+        if (!MONGODB_URI) {
+            console.warn('⚠️ MONGODB_URI is not set. Skipping MongoDB connection.');
+            return;
+        }
         await mongoose_1.default.connect(MONGODB_URI);
         console.log('✅ MongoDB connected');
     }
     catch (error) {
         console.error('❌ MongoDB connection failed:', error);
-        process.exit(1);
+        console.warn('⚠️ Continuing without MongoDB. Some features may be disabled.');
     }
 }
 async function disconnectDB() {
@@ -65,3 +70,6 @@ async function disconnectDB() {
     }
 }
 exports.default = mongoose_1.default;
+function isDbConnected() {
+    return mongoose_1.default.connection.readyState === 1;
+}

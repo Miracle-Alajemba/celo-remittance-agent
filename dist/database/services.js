@@ -5,6 +5,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.findOrCreateUser = findOrCreateUser;
 exports.getUserByIdOrAddress = getUserByIdOrAddress;
+exports.getAllUsers = getAllUsers;
 exports.updateUserProfile = updateUserProfile;
 exports.resetDailySpending = resetDailySpending;
 exports.createTransaction = createTransaction;
@@ -19,6 +20,9 @@ exports.updateScheduledTransfer = updateScheduledTransfer;
 exports.cancelScheduledTransferDB = cancelScheduledTransferDB;
 exports.getScheduledTransfersForExecution = getScheduledTransfersForExecution;
 exports.insertScheduledTransferExecution = insertScheduledTransferExecution;
+exports.createConversationMessage = createConversationMessage;
+exports.getConversationHistory = getConversationHistory;
+exports.clearAllDemoData = clearAllDemoData;
 const models_1 = require("./models");
 // ==================== User Services ====================
 async function findOrCreateUser(userId, walletAddress, name) {
@@ -28,7 +32,7 @@ async function findOrCreateUser(userId, walletAddress, name) {
             userId,
             walletAddress,
             name: name || `User ${userId.substring(0, 8)}`,
-            language: 'en',
+            language: "en",
             dailySpendingLimit: 500,
             monthlySpendingLimit: 5000,
         });
@@ -43,6 +47,9 @@ async function getUserByIdOrAddress(userId, walletAddress) {
         return models_1.User.findOne({ walletAddress });
     }
     return null;
+}
+async function getAllUsers() {
+    return models_1.User.find({}).exec();
 }
 async function updateUserProfile(userId, updates) {
     return models_1.User.findOneAndUpdate({ userId }, updates, { new: true });
@@ -97,12 +104,12 @@ async function updateScheduledTransfer(id, updates) {
     return models_1.ScheduledTransfer.findByIdAndUpdate(id, updates, { new: true });
 }
 async function cancelScheduledTransferDB(id) {
-    return models_1.ScheduledTransfer.findByIdAndUpdate(id, { status: 'cancelled' }, { new: true });
+    return models_1.ScheduledTransfer.findByIdAndUpdate(id, { status: "cancelled" }, { new: true });
 }
 async function getScheduledTransfersForExecution(limit = 10) {
     const now = new Date();
     return models_1.ScheduledTransfer.find({
-        status: 'active',
+        status: "active",
         nextExecutionDate: { $lte: now },
     })
         .limit(limit)
@@ -117,21 +124,41 @@ async function insertScheduledTransferExecution(scheduledTransferId) {
         executionCount: transfer.executionCount + 1,
         lastExecutionDate: new Date(),
         nextExecutionDate: nextDate,
-        status: transfer.maxExecutions && transfer.executionCount + 1 >= transfer.maxExecutions
-            ? 'completed'
-            : 'active',
+        status: transfer.maxExecutions &&
+            transfer.executionCount + 1 >= transfer.maxExecutions
+            ? "completed"
+            : "active",
     }, { new: true });
+}
+// ==================== Conversation Services ====================
+async function createConversationMessage(data) {
+    return models_1.ConversationMessage.create(data);
+}
+async function getConversationHistory(userId, limit = 50) {
+    return models_1.ConversationMessage.find({ userId })
+        .sort({ timestamp: -1 })
+        .limit(limit)
+        .exec();
+}
+// ==================== Demo Helpers ====================
+async function clearAllDemoData() {
+    await Promise.all([
+        models_1.User.deleteMany({}),
+        models_1.Transaction.deleteMany({}),
+        models_1.ScheduledTransfer.deleteMany({}),
+        models_1.ConversationMessage.deleteMany({}),
+    ]);
 }
 function calculateNextExecutionDate(currentDate, frequency) {
     const next = new Date(currentDate);
     switch (frequency) {
-        case 'weekly':
+        case "weekly":
             next.setDate(next.getDate() + 7);
             break;
-        case 'biweekly':
+        case "biweekly":
             next.setDate(next.getDate() + 14);
             break;
-        case 'monthly':
+        case "monthly":
             next.setMonth(next.getMonth() + 1);
             break;
     }

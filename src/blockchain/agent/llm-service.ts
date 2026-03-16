@@ -50,6 +50,7 @@ You should help users:
 3. Schedule recurring transfers
 4. Check balances and transaction history
 5. Understand transfer routes and currency conversions
+6. Preview token swaps on Mento (e.g., swap cUSD to cEUR)
 
 When analyzing a message:
 - Extract the amount, recipient country, frequency (if recurring), and any other relevant details
@@ -61,7 +62,7 @@ When analyzing a message:
 Respond with JSON only:
 {
   "understanding": "Brief summary of what the user wants",
-  "action": "send|check_balance|history|compare_fees|schedule|cancel|help|greeting",
+  "action": "send|check_balance|history|compare_fees|schedule|cancel|help|greeting|swap",
   "amount": "numeric amount or null",
   "recipientCountry": "country name or null",
   "recipientName": "name or null",
