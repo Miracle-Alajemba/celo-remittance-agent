@@ -83,7 +83,8 @@ const RESPONSES: { [lang: string]: { [key: string]: string } } = {
     need_amount: "💰 How much would you like to send? (e.g., $50 or 100 euros)",
     need_recipient:
       "📍 Where would you like to send the money to? Which country?",
-    need_address: "📧 Please provide the recipient's wallet address (0x...)",
+    need_address:
+      "📧 Please provide the recipient's wallet address (the receiver's 0x... address, not yours).",
     transfer_success:
       "✅ **Transfer Successful!**\n\n💵 **Amount:** {amount} {currency}\n👤 **To:** {recipientName}\n🌍 **Country:** {recipientCountry}\n\n🔗 **Transaction Details**\n└ Hash: `{txHash}`\n└ Block: {blockNumber}\n└ Gas: {gasUsed} gwei\n\n⚡ *Funds are available to the recipient immediately.*",
     transfer_failed:
@@ -112,7 +113,7 @@ const RESPONSES: { [lang: string]: { [key: string]: string } } = {
     need_amount: "💰 ¿Cuánto te gustaría enviar? (ej: $50 o 100 euros)",
     need_recipient: "📍 ¿A dónde te gustaría enviar el dinero? ¿A qué país?",
     need_address:
-      "📧 Por favor proporciona la dirección de billetera del destinatario (0x...)",
+      "📧 Por favor proporciona la dirección de billetera del destinatario (la dirección 0x... de quien recibe, no la tuya).",
     transfer_success:
       "✅ **¡Transferencia Exitosa!**\n\n💵 **Monto:** {amount} {currency}\n👤 **Para:** {recipientName}\n🌍 **País:** {recipientCountry}\n\n🔗 **Detalles de Transacción**\n└ Hash: `{txHash}`\n└ Bloque: {blockNumber}\n└ Gas: {gasUsed}\n\n⚡ *Los fondos ya están disponibles para el destinatario.*",
     transfer_failed:
@@ -140,7 +141,7 @@ const RESPONSES: { [lang: string]: { [key: string]: string } } = {
     need_recipient:
       "📍 Para onde você gostaria de enviar o dinheiro? Qual país?",
     need_address:
-      "📧 Por favor forneça o endereço da carteira do destinatário (0x...)",
+      "📧 Por favor forneça o endereço da carteira do destinatário (o endereço 0x... de quem vai receber, não o seu).",
     transfer_success:
       "✅ **Transferência Bem-sucedida!**\n\n🔗 Hash da Transação: `{txHash}`\n📦 Bloco: {blockNumber}\n⛽ Gas Usado: {gasUsed}\n\nSeus {amount} {currency} foram enviados! O destinatário será notificado.",
     help: '🤖 **Agente de Remessas Celo - Ajuda**\n\n**O que posso fazer:**\n🔸 Enviar dinheiro globalmente\n🔸 Comparar taxas vs Western Union, Wise\n🔸 Agendar transferências recorrentes\n🔸 Histórico de transações\n🔸 Prévia de swaps com Mento\n\n**Comandos:**\n• "Envie $100 para Filipinas"\n• "Compare taxas $500 para Quênia"\n• "Trocar 10 cUSD para cEUR"\n\n**Idiomas:** English, Español, Português, Français',
@@ -166,7 +167,7 @@ const RESPONSES: { [lang: string]: { [key: string]: string } } = {
     need_amount: "💰 Combien souhaitez-vous envoyer? (ex: 50$ ou 100 euros)",
     need_recipient: "📍 Où souhaitez-vous envoyer l'argent? Quel pays?",
     need_address:
-      "📧 Veuillez fournir l'adresse du portefeuille du destinataire (0x...)",
+      "📧 Veuillez fournir l'adresse du portefeuille du destinataire (l'adresse 0x... du receveur, pas la vôtre).",
     transfer_success:
       "✅ **Transfert Réussi!**\n\n🔗 Hash de Transaction: `{txHash}`\n📦 Bloc: {blockNumber}\n⛽ Gas Utilisé: {gasUsed}\n\nVos {amount} {currency} ont été envoyés! Le destinataire sera notifié.",
     help: '🤖 **Agent de Transfert Celo - Aide**\n\n**Ce que je peux faire:**\n🔸 Envoyer de l\'argent dans le monde entier\n🔸 Comparer les frais vs Western Union, Wise\n🔸 Programmer des transferts récurrents\n🔸 Historique des transactions\n🔸 Aperçu des swaps via Mento\n\n**Commandes:**\n• "Envoie 100$ aux Philippines"\n• "Compare les frais 500$ au Kenya"\n• "Échanger 10 cUSD en cEUR"\n\n**Langues:** English, Español, Português, Français',
@@ -267,94 +268,20 @@ export class AgentOrchestrator {
       existingProfile?.walletAddress ||
       this.walletAddress !== "0x0000000000000000000000000000000000000000";
 
-    // If user has wallet saved, skip first interaction
     if (hasWallet) {
       this.isFirstInteraction = false;
-    }
-
-    // First message - show intro
-    if (this.isFirstInteraction && !hasWallet) {
+    } else if (this.isFirstInteraction) {
+      // Do not force sender wallet collection on first contact.
+      // For the demo flow, let the user go straight into send/help actions.
       this.isFirstInteraction = false;
-
-      // Detect language from first message
-      const intent = parseRemittanceIntent(userMessage);
-      const lang = intent.detectedLanguage;
-
-      // Show intro + ask for wallet
-      const introMessages: { [lang: string]: string } = {
-        en: `👋 **Welcome to Celo Remittance Agent!**
-
-I help you send money globally using Celo stablecoins - faster and cheaper than traditional providers like Western Union or Wise.
-
-💰 **What I can do:**
-• Send money to any country
-• Compare fees with traditional providers  
-• Schedule recurring transfers
-• Track transaction history
-• Swap between currencies
-
-🔐 **First, let me know which wallet you'll be sending FROM.**
-
-Please share your Celo wallet address (starts with 0x...)`,
-        es: `👋 **¡Bienvenido a Agente de Remesas Celo!**
-
-Te ayudo a enviar dinero globalmente usando stablecoins Celo - más rápido y económico que proveedores tradicionales como Western Union o Wise.
-
-💰 **Lo que puedo hacer:**
-• Enviar dinero a cualquier país
-• Comparar tarifas con proveedores tradicionales
-• Programar transferencias recurrentes
-• Historial de transacciones
-• Cambio entre monedas
-
-🔐 **Primero, dame la billetera desde la que enviarás.**
-
-Por favor comparte tu dirección de billetera Celo (comienza con 0x...)`,
-        pt: `👋 **Bem-vindo ao Agente de Remessas Celo!**
-
-Ajudo você a enviar dinheiro globalmente usando stablecoins Celo - mais rápido e barato que provedores tradicionais como Western Union ou Wise.
-
-💰 **O que posso fazer:**
-• Enviar dinheiro para qualquer país
-• Comparar taxas com provedores tradicionais
-• Agendar transferências recorrentes
-• Histórico de transações
-• Trocar entre moedas
-
-🔐 **Primeiro, me diga qual carteira você usará para enviar.**
-
-Por favor compartilhe seu endereço de carteira Celo (começa com 0x...)`,
-        fr: `👋 **Bienvenue sur Agent de Transfert Celo!**
-
-Je vous aide à envoyer de l'argent dans le monde entier à l'aide de stablecoins Celo - plus rapide et moins cher que les fournisseurs traditionnels comme Western Union ou Wise.
-
-💰 **Ce que je peux faire:**
-• Envoyer de l'argent vers n'importe quel pays
-• Comparer les frais avec les fournisseurs traditionnels
-• Programmer des transferts récurrents
-• Historique des transactions
-• Échanger entre les devises
-
-🔐 **D'abord, dites-moi depuis quel portefeuille vous allez envoyer.**
-
-Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
-      };
-
-      this.pendingWalletRequest = true;
-      const response = this.createResponse(
-        introMessages[lang] || introMessages["en"],
-        "text",
-        lang,
-      );
-      this.memory.addMessage("agent", response.message);
-      return response;
     }
 
     // Capture wallet address if user provides it directly
     const directAddress = this.extractAddress(userMessage);
     if (
       directAddress &&
-      /wallet|address|cartera|billetera|carteira|portefeuille|0x/i.test(
+      !this.pendingSendIntent &&
+      /wallet|address|cartera|billetera|carteira|portefeuille/i.test(
         userMessage,
       )
     ) {
@@ -416,7 +343,7 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
               ? "⚠️ Por favor compartilhe seu endereço de carteira (0x...)"
               : lang === "fr"
                 ? "⚠️ Veuillez partager votre adresse de portefeuille (0x...)"
-                : "⚠️ Please share your wallet address (0x...).";
+                : "⚠️ Please share your own wallet address (your sender wallet, 0x...).";
         return this.createResponse(msg, "text", lang);
       }
     }
@@ -1043,7 +970,7 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
             ? "Primeiro, envie seu endereço de carteira (0x...) para consultar seu saldo."
             : lang === "fr"
               ? "Veuillez d’abord envoyer votre adresse de portefeuille (0x...) pour vérifier le solde."
-              : "Please send your wallet address (0x...) first so I can check your balance.";
+              : "Please send your own wallet address first (your sender wallet, 0x...) so I can check your balance.";
       this.pendingWalletRequest = true;
       return this.createResponse(prompt, "text", lang);
     }
@@ -1093,7 +1020,7 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
       this.walletAddress = address;
       this.memory.setUserProfile({ walletAddress: address });
       this.pendingWalletRequest = false;
-      const msg = `✅ Wallet address saved: ${address}`;
+      const msg = `✅ Your sender wallet address has been saved: ${address}`;
       return this.createResponse(msg, "text", lang, [
         "Check balance",
         "Send money",
@@ -1128,7 +1055,7 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
             ? "Por favor me envie seu endereço de carteira (0x...)."
             : lang === "fr"
               ? "Veuillez m’envoyer votre adresse de portefeuille (0x...)."
-              : "Please send me your wallet address (0x...).";
+              : "Please send me your own wallet address (your sender wallet, 0x...).";
       return this.createResponse(prompt, "text", lang);
     }
 
@@ -1422,3 +1349,9 @@ Veuillez partager votre adresse de portefeuille Celo (commence par 0x...)`,
     );
   }
 }
+
+
+
+
+
+
