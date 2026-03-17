@@ -46,6 +46,7 @@ export function resetScheduledTransfers(): void {
 }
 
 export function createScheduledTransfer(params: {
+  userId?: string;
   recipientAddress: string;
   recipientName: string;
   recipientCountry: string;
@@ -63,7 +64,7 @@ export function createScheduledTransfer(params: {
 
   const transfer: ScheduledTransfer = {
     id,
-    userId: 'default_user',
+    userId: params.userId || 'default_user',
     recipientAddress: params.recipientAddress,
     recipientName: params.recipientName,
     recipientCountry: params.recipientCountry,
@@ -99,6 +100,7 @@ export async function createScheduledTransferPersistent(params: {
   maxExecutions?: number;
 }): Promise<ScheduledTransfer> {
   const inMemory = createScheduledTransfer({
+    userId: params.userId,
     recipientAddress: params.recipientAddress,
     recipientName: params.recipientName,
     recipientCountry: params.recipientCountry,

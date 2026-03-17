@@ -32,7 +32,7 @@ function createScheduledTransfer(params) {
     const nextDate = calculateNextExecution(now, params.frequency);
     const transfer = {
         id,
-        userId: 'default_user',
+        userId: params.userId || 'default_user',
         recipientAddress: params.recipientAddress,
         recipientName: params.recipientName,
         recipientCountry: params.recipientCountry,
@@ -54,6 +54,7 @@ function createScheduledTransfer(params) {
 }
 async function createScheduledTransferPersistent(params) {
     const inMemory = createScheduledTransfer({
+        userId: params.userId,
         recipientAddress: params.recipientAddress,
         recipientName: params.recipientName,
         recipientCountry: params.recipientCountry,

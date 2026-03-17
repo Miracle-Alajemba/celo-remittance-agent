@@ -6,6 +6,8 @@ const erc8004_wallet_1 = require("./erc8004-wallet");
 const services_1 = require("../../database/services");
 const connection_1 = require("../../database/connection");
 const notification_service_1 = require("./notification-service");
+const transaction_history_1 = require("./transaction-history");
+const scheduler_1 = require("./scheduler");
 const TOKEN_MAP = {
     USD: 'cUSD',
     EUR: 'cEUR',
@@ -23,46 +25,72 @@ function getNotificationChannels() {
         .filter((v) => v === 'sms' || v === 'whatsapp');
 }
 function startSchedulerWorker(intervalMs = 30000) {
+    const mode = (0, connection_1.isDbConnected)() ? 'database' : 'in-memory demo';
     if (!(0, connection_1.isDbConnected)()) {
-        console.warn('[Scheduler] DB not connected. Scheduler worker will not start.');
-        return null;
+        console.warn('[Scheduler] MongoDB is unavailable. Running recurring transfers in in-memory demo mode; schedules will reset on restart.');
     }
-    console.log(`[Scheduler] Worker started (interval: ${intervalMs}ms)`);
+    console.log(`[Scheduler] Worker started in ${mode} mode (interval: ${intervalMs}ms)`);
     return setInterval(async () => {
         try {
-            const dueTransfers = await (0, services_1.getScheduledTransfersForExecution)(10);
+            const dueTransfers = (0, connection_1.isDbConnected)()
+                ? await (0, services_1.getScheduledTransfersForExecution)(10)
+                : (0, scheduler_1.getDueTransfers)().slice(0, 10);
             if (dueTransfers.length === 0)
                 return;
             const wallet = (0, erc8004_wallet_1.getAgentWallet)();
             for (const transfer of dueTransfers) {
                 const token = TOKEN_MAP[transfer.sourceCurrency] || transfer.sourceCurrency;
+                const transferAmount = Number(transfer.amount);
                 const execution = await (0, transaction_executor_1.executeBlockchainTransfer)({
                     recipient: transfer.recipientAddress,
-                    amount: transfer.amount.toString(),
+                    amount: transferAmount.toString(),
                     currency: token,
                     recipientName: transfer.recipientName,
                     recipientCountry: transfer.recipientCountry,
                 });
-                await (0, services_1.createTransaction)({
-                    userId: transfer.userId,
-                    type: 'scheduled',
-                    senderAddress: wallet.walletAddress,
-                    recipientAddress: transfer.recipientAddress,
-                    recipientName: transfer.recipientName,
-                    recipientCountry: transfer.recipientCountry,
-                    sendAmount: transfer.amount,
-                    sendCurrency: transfer.sourceCurrency,
-                    receiveAmount: transfer.amount, // TODO: use real FX rates
-                    receiveCurrency: transfer.targetCurrency,
-                    exchangeRate: 1, // TODO: use real FX rates
-                    networkFee: 0.001,
-                    swapFee: 0,
-                    txHash: execution.txHash || '',
-                    blockNumber: execution.blockNumber,
-                    gasUsed: execution.gasUsed,
-                    status: execution.success ? 'completed' : 'failed',
-                });
-                await (0, services_1.insertScheduledTransferExecution)(transfer.id);
+                if ((0, connection_1.isDbConnected)()) {
+                    await (0, services_1.createTransaction)({
+                        userId: transfer.userId,
+                        type: 'scheduled',
+                        senderAddress: wallet.walletAddress,
+                        recipientAddress: transfer.recipientAddress,
+                        recipientName: transfer.recipientName,
+                        recipientCountry: transfer.recipientCountry,
+                        sendAmount: transferAmount,
+                        sendCurrency: transfer.sourceCurrency,
+                        receiveAmount: transferAmount, // TODO: use real FX rates
+                        receiveCurrency: transfer.targetCurrency,
+                        exchangeRate: 1, // TODO: use real FX rates
+                        networkFee: 0.001,
+                        swapFee: 0,
+                        txHash: execution.txHash || '',
+                        blockNumber: execution.blockNumber,
+                        gasUsed: execution.gasUsed,
+                        status: execution.success ? 'completed' : 'failed',
+                    });
+                    await (0, services_1.insertScheduledTransferExecution)(transfer.id);
+                }
+                else {
+                    (0, transaction_history_1.recordTransaction)({
+                        type: 'scheduled',
+                        sender: wallet.walletAddress,
+                        recipientName: transfer.recipientName,
+                        recipientAddress: transfer.recipientAddress,
+                        recipientCountry: transfer.recipientCountry,
+                        sendAmount: transferAmount,
+                        sendCurrency: transfer.sourceCurrency,
+                        receiveAmount: transferAmount,
+                        receiveCurrency: transfer.targetCurrency,
+                        exchangeRate: 1,
+                        networkFee: 0.001,
+                        swapFee: 0,
+                        txHash: execution.txHash,
+                        blockNumber: execution.blockNumber,
+                        gasUsed: execution.gasUsed,
+                        scheduledTransferId: transfer.id,
+                    });
+                    (0, scheduler_1.markTransferExecuted)(transfer.id);
+                }
                 const notifyTo = transfer.notifyPhone || process.env.RECIPIENT_PHONE || process.env.RECIPIENT_WHATSAPP;
                 if (notifyTo) {
                     const payload = {
