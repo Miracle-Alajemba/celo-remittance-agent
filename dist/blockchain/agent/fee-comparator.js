@@ -127,6 +127,16 @@ function formatDeliveryLabel(raw) {
     }
     return raw;
 }
+function formatComparisonSource(source) {
+    switch (source) {
+        case "wise_comparison_api":
+            return "live provider quotes";
+        case "mixed":
+            return "live provider quotes + fallback estimates";
+        default:
+            return "live FX-based estimates";
+    }
+}
 function addSavings(provider, celoReceiveAmount) {
     const savings = celoReceiveAmount - provider.receiveAmount;
     const savingsPercent = provider.receiveAmount > 0 ? (savings / provider.receiveAmount) * 100 : 0;
@@ -200,10 +210,22 @@ async function fetchWiseComparisonQuotes(params) {
         timeout,
     });
     const data = response.data;
+    if (Array.isArray(data)) {
+        return data.flatMap((provider) => (provider.quotes || []).map((quote) => ({
+            ...quote,
+            providerAlias: quote.providerAlias || provider.alias,
+            providerName: quote.providerName || provider.name,
+        })));
+    }
     if (Array.isArray(data?.quotes))
         return data.quotes;
-    if (Array.isArray(data?.providers))
-        return data.providers;
+    if (Array.isArray(data?.providers)) {
+        return data.providers.flatMap((provider) => (provider.quotes || []).map((quote) => ({
+            ...quote,
+            providerAlias: quote.providerAlias || provider.alias,
+            providerName: quote.providerName || provider.name,
+        })));
+    }
     return [];
 }
 function buildWiseLiveProviderQuote(params) {
@@ -351,7 +373,7 @@ function formatFeeComparison(comparison, lang = "en") {
     let output = `💰 Fee Comparison\n`;
     output += `Corridor: ${corridor}\n`;
     output += `You send: ${sendAmount} ${sendCurrency}\n`;
-    output += `Source: ${comparisonSource}\n\n`;
+    output += `Source: ${formatComparisonSource(comparisonSource)}\n\n`;
     output += `🟢 ${celoFees.provider} (Recommended)\n`;
     output += `Receive: ${celoFees.receiveAmount.toLocaleString()} ${receiveCurrency}\n`;
     output += `Fee: $${celoFees.transferFee}\n`;

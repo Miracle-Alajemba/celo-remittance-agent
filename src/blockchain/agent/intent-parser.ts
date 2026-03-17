@@ -326,13 +326,18 @@ export function parseRemittanceIntent(userInput: string): RemittanceIntent {
     }
   }
 
+  const shouldDefaultSourceCurrency =
+    action === 'send' ||
+    action === 'schedule' ||
+    action === 'compare_fees';
+
   return {
     action,
     amount,
     recipientCountry,
     recipientName,
     recipientAddress,
-    sourceCurrency: sourceCurrency || (action === 'swap' ? undefined : 'USD'),
+    sourceCurrency: sourceCurrency || (shouldDefaultSourceCurrency ? 'USD' : undefined),
     targetCurrency,
     frequency,
     confidence: Math.min(confidence, 1),
