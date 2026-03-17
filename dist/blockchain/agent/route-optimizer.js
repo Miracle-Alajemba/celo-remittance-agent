@@ -187,8 +187,19 @@ function buildFxRoutes(sourceCurrency, targetCurrency, amount) {
     return normalizeRoutes(routes);
 }
 async function findOptimalRoute(sourceCurrency, targetCurrency, amount) {
-    const tokenIn = await (0, mento_client_1.resolveTokenBySymbol)(sourceCurrency);
-    const tokenOut = await (0, mento_client_1.resolveTokenBySymbol)(targetCurrency);
+    if (process.env.DEMO_FAST_MODE === 'true') {
+        return buildFxRoutes(sourceCurrency, targetCurrency, amount);
+    }
+    let tokenIn = null;
+    let tokenOut = null;
+    try {
+        tokenIn = await (0, mento_client_1.resolveTokenBySymbol)(sourceCurrency);
+        tokenOut = await (0, mento_client_1.resolveTokenBySymbol)(targetCurrency);
+    }
+    catch (error) {
+        console.warn('[Route Optimizer] Token resolution failed, falling back to FX:', error);
+        return buildFxRoutes(sourceCurrency, targetCurrency, amount);
+    }
     if (tokenIn && tokenOut) {
         try {
             const routes = await buildOnChainRoutes(tokenIn, tokenOut, amount);

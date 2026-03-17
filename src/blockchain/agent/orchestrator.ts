@@ -221,6 +221,13 @@ export class AgentOrchestrator {
   } | null = null;
   private isFirstInteraction: boolean = true;
 
+  private getExecutionTimeoutMs(): number {
+    if (process.env.BLOCKCHAIN_EXECUTION_TIMEOUT_MS) {
+      return Number(process.env.BLOCKCHAIN_EXECUTION_TIMEOUT_MS);
+    }
+    return process.env.DEMO_FAST_MODE === "true" ? 15000 : 45000;
+  }
+
   constructor(
     userId: string = "default_user",
     walletAddress: string = "0x0000000000000000000000000000000000000000",
@@ -353,6 +360,40 @@ export class AgentOrchestrator {
       return await this.handleConfirmation(userMessage);
     }
 
+    const orphanConfirmWords = [
+      "yes",
+      "si",
+      "sí",
+      "sim",
+      "oui",
+      "ok",
+      "proceed",
+      "confirm",
+    ];
+    const lowerUserMessage = userMessage.toLowerCase();
+    const looksLikeOrphanConfirmation =
+      orphanConfirmWords.some((w) => lowerUserMessage.includes(w)) &&
+      /send|enviar|envoyer/.test(lowerUserMessage);
+
+    if (looksLikeOrphanConfirmation) {
+      const lang =
+        preferredLang ||
+        this.memory.getLastIntent()?.detectedLanguage ||
+        "en";
+      const msg =
+        lang === "es"
+          ? "⚠️ No tengo una transferencia pendiente para confirmar. Empieza con algo como: \"Envía $50 a Filipinas\"."
+          : lang === "pt"
+            ? "⚠️ Não tenho nenhuma transferência pendente para confirmar. Comece com algo como: \"Envie $50 para Filipinas\"."
+            : lang === "fr"
+              ? "⚠️ Je n’ai aucun transfert en attente à confirmer. Commencez par quelque chose comme : \"Envoie 50$ aux Philippines\"."
+              : '⚠️ I do not have a pending transfer to confirm. Start with something like: "Send $50 to the Philippines".';
+      return this.createResponse(msg, "text", lang, [
+        "Send money",
+        "Compare fees",
+      ]);
+    }
+
     // Parse intent (keyword-based as fallback)
     let intent = parseRemittanceIntent(userMessage);
     let lang = intent.detectedLanguage;
@@ -419,6 +460,15 @@ export class AgentOrchestrator {
 
     if (lastIntent && lastIntent.action === "send" && hasNewSendFields) {
       intent = this.mergeIntent(lastIntent as RemittanceIntent, intent);
+    }
+
+    if (
+      lastIntent &&
+      lastIntent.action === "send" &&
+      intent.action === "compare_fees"
+    ) {
+      intent = this.mergeIntent(lastIntent as RemittanceIntent, intent);
+      intent.action = "compare_fees";
     }
 
     this.memory.setLastIntent(intent);
@@ -760,10 +810,20 @@ export class AgentOrchestrator {
       let transferCurrency = blockchainToken;
 
       // If both currencies exist on-chain, swap via Mento before transfer
-      const canSwap =
-        blockchainToken.toLowerCase() !== targetToken.toLowerCase() &&
-        (await resolveTokenBySymbol(blockchainToken)) &&
-        (await resolveTokenBySymbol(targetToken));
+      let canSwap = false;
+      if (blockchainToken.toLowerCase() !== targetToken.toLowerCase()) {
+        try {
+          const sourceTokenInfo = await resolveTokenBySymbol(blockchainToken);
+          const targetTokenInfo = await resolveTokenBySymbol(targetToken);
+          canSwap = Boolean(sourceTokenInfo && targetTokenInfo);
+        } catch (error) {
+          console.warn(
+            "[Confirmation] Mento token resolution failed, skipping swap path:",
+            error,
+          );
+          canSwap = false;
+        }
+      }
 
       if (canSwap) {
         const maxSlippage = Number(process.env.MENTO_MAX_SLIPPAGE || 0.01);
@@ -789,13 +849,37 @@ export class AgentOrchestrator {
       }
 
       // Execute blockchain transfer
-      const executionResult = await executeBlockchainTransfer({
-        recipient: recipientAddress,
-        amount: transferAmount,
-        currency: transferCurrency,
-        recipientName: intent.recipientName || "Recipient",
-        recipientCountry: intent.recipientCountry || "",
-      });
+      let executionResult;
+      try {
+        executionResult = await Promise.race([
+          executeBlockchainTransfer({
+            recipient: recipientAddress,
+            amount: transferAmount,
+            currency: transferCurrency,
+            recipientName: intent.recipientName || "Recipient",
+            recipientCountry: intent.recipientCountry || "",
+          }),
+          new Promise<never>((_, reject) => {
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    "Blockchain execution timed out while waiting for the RPC response.",
+                  ),
+                ),
+              this.getExecutionTimeoutMs(),
+            );
+          }),
+        ]);
+      } catch (error: any) {
+        executionResult = {
+          success: false,
+          error:
+            error?.message ||
+            "Blockchain execution timed out while waiting for the RPC response.",
+          status: "failed" as const,
+        };
+      }
 
       // Record transaction with actual blockchain result
       const txRecord = recordTransaction({
@@ -1289,7 +1373,9 @@ export class AgentOrchestrator {
 
   clearMemory(): void {
     this.memory.clear();
+    this.pendingSendIntent = null;
     this.pendingConfirmation = null;
+    this.pendingWalletRequest = false;
   }
 
   private getNotificationChannels(): ("sms" | "whatsapp")[] {
@@ -1349,9 +1435,4 @@ export class AgentOrchestrator {
     );
   }
 }
-
-
-
-
-
 

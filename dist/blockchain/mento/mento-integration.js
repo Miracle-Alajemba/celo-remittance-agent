@@ -62,13 +62,31 @@ async function resolvePair(inputCurrency, outputCurrency) {
     }
     return { tokenIn, tokenOut };
 }
+function buildFallbackQuote(params) {
+    const { inputAmount, amount, inputCurrency, outputCurrency, inputSymbol, outputSymbol, } = params;
+    const fallbackRate = (0, rates_1.getRate)(toFiatSymbol(inputSymbol), toFiatSymbol(outputSymbol)) || 1;
+    const feePercent = 0.3;
+    const outputNumeric = amount * fallbackRate * (1 - feePercent / 100);
+    return {
+        inputAmount,
+        outputAmount: outputNumeric.toFixed(6),
+        inputCurrency,
+        outputCurrency,
+        rate: fallbackRate,
+        slippage: DEFAULT_SLIPPAGE,
+        fee: amount * (feePercent / 100),
+        feePercent,
+        estimatedGas: "0.001",
+        route: `${inputSymbol} → ${outputSymbol} (FX fallback)`,
+    };
+}
 async function getSwapQuote(inputCurrency, outputCurrency, inputAmount) {
+    const amount = Number(inputAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error(`Invalid input amount: ${inputAmount}`);
+    }
+    const { tokenIn, tokenOut } = await resolvePair(inputCurrency, outputCurrency);
     try {
-        const { tokenIn, tokenOut } = await resolvePair(inputCurrency, outputCurrency);
-        const amount = Number(inputAmount);
-        if (!Number.isFinite(amount) || amount <= 0) {
-            throw new Error(`Invalid input amount: ${inputAmount}`);
-        }
         const mento = await (0, mento_client_1.getReadOnlyMento)();
         const decimalsIn = await (0, mento_client_1.getTokenDecimals)(tokenIn.address);
         const decimalsOut = await (0, mento_client_1.getTokenDecimals)(tokenOut.address);
@@ -92,8 +110,15 @@ async function getSwapQuote(inputCurrency, outputCurrency, inputAmount) {
         };
     }
     catch (error) {
-        console.error("Swap quote error:", error);
-        throw error;
+        console.warn("Swap quote error, using FX fallback:", error);
+        return buildFallbackQuote({
+            inputAmount,
+            amount,
+            inputCurrency: tokenIn.symbol,
+            outputCurrency: tokenOut.symbol,
+            inputSymbol: tokenIn.symbol,
+            outputSymbol: tokenOut.symbol,
+        });
     }
 }
 async function executeSwap(inputCurrency, outputCurrency, inputAmount, maxSlippage = 0.01) {

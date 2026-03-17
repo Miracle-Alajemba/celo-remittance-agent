@@ -241,8 +241,23 @@ export async function findOptimalRoute(
   targetCurrency: string,
   amount: number
 ): Promise<TransferRoute[]> {
-  const tokenIn = await resolveTokenBySymbol(sourceCurrency);
-  const tokenOut = await resolveTokenBySymbol(targetCurrency);
+  if (process.env.DEMO_FAST_MODE === 'true') {
+    return buildFxRoutes(sourceCurrency, targetCurrency, amount);
+  }
+
+  let tokenIn: TokenInfo | null = null;
+  let tokenOut: TokenInfo | null = null;
+
+  try {
+    tokenIn = await resolveTokenBySymbol(sourceCurrency);
+    tokenOut = await resolveTokenBySymbol(targetCurrency);
+  } catch (error) {
+    console.warn(
+      '[Route Optimizer] Token resolution failed, falling back to FX:',
+      error,
+    );
+    return buildFxRoutes(sourceCurrency, targetCurrency, amount);
+  }
 
   if (tokenIn && tokenOut) {
     try {

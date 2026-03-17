@@ -100,21 +100,58 @@ async function resolvePair(
   return { tokenIn, tokenOut };
 }
 
+function buildFallbackQuote(params: {
+  inputAmount: string;
+  amount: number;
+  inputCurrency: string;
+  outputCurrency: string;
+  inputSymbol: string;
+  outputSymbol: string;
+}): SwapQuote {
+  const {
+    inputAmount,
+    amount,
+    inputCurrency,
+    outputCurrency,
+    inputSymbol,
+    outputSymbol,
+  } = params;
+
+  const fallbackRate =
+    getFxRate(toFiatSymbol(inputSymbol), toFiatSymbol(outputSymbol)) || 1;
+  const feePercent = 0.3;
+  const outputNumeric = amount * fallbackRate * (1 - feePercent / 100);
+
+  return {
+    inputAmount,
+    outputAmount: outputNumeric.toFixed(6),
+    inputCurrency,
+    outputCurrency,
+    rate: fallbackRate,
+    slippage: DEFAULT_SLIPPAGE,
+    fee: amount * (feePercent / 100),
+    feePercent,
+    estimatedGas: "0.001",
+    route: `${inputSymbol} → ${outputSymbol} (FX fallback)`,
+  };
+}
+
 export async function getSwapQuote(
   inputCurrency: string,
   outputCurrency: string,
   inputAmount: string,
 ): Promise<SwapQuote> {
-  try {
-    const { tokenIn, tokenOut } = await resolvePair(
-      inputCurrency,
-      outputCurrency,
-    );
-    const amount = Number(inputAmount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new Error(`Invalid input amount: ${inputAmount}`);
-    }
+  const amount = Number(inputAmount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error(`Invalid input amount: ${inputAmount}`);
+  }
 
+  const { tokenIn, tokenOut } = await resolvePair(
+    inputCurrency,
+    outputCurrency,
+  );
+
+  try {
     const mento = await getReadOnlyMento();
     const decimalsIn = await getTokenDecimals(tokenIn.address);
     const decimalsOut = await getTokenDecimals(tokenOut.address);
@@ -148,8 +185,15 @@ export async function getSwapQuote(
       route: `${tokenIn.symbol} → ${tokenOut.symbol} (Mento)`,
     };
   } catch (error) {
-    console.error("Swap quote error:", error);
-    throw error;
+    console.warn("Swap quote error, using FX fallback:", error);
+    return buildFallbackQuote({
+      inputAmount,
+      amount,
+      inputCurrency: tokenIn.symbol,
+      outputCurrency: tokenOut.symbol,
+      inputSymbol: tokenIn.symbol,
+      outputSymbol: tokenOut.symbol,
+    });
   }
 }
 

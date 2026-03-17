@@ -181,6 +181,13 @@ function getWiseApiBaseUrl(): string {
   return (process.env.WISE_API_URL || "https://api.wise.com").replace(/\/$/, "");
 }
 
+function shouldUseLiveProviderQuotes(): boolean {
+  if (process.env.LIVE_PROVIDER_COMPARE === "false") {
+    return false;
+  }
+  return process.env.DEMO_FAST_MODE !== "true";
+}
+
 function normalizeProviderName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -413,16 +420,18 @@ async function buildTraditionalProviders(params: {
   const sourceCountry = SEND_COUNTRY_BY_CURRENCY[sendCurrency];
   let wiseQuotes: WiseComparisonQuote[] = [];
 
-  try {
-    wiseQuotes = await fetchWiseComparisonQuotes({
-      amount,
-      sendCurrency,
-      receiveCurrency,
-      targetCountry: receiveCountry,
-      sourceCountry,
-    });
-  } catch (error) {
-    console.warn("[FeeComparison] Failed to fetch Wise comparison quotes:", error);
+  if (shouldUseLiveProviderQuotes()) {
+    try {
+      wiseQuotes = await fetchWiseComparisonQuotes({
+        amount,
+        sendCurrency,
+        receiveCurrency,
+        targetCountry: receiveCountry,
+        sourceCountry,
+      });
+    } catch (error) {
+      console.warn("[FeeComparison] Failed to fetch Wise comparison quotes:", error);
+    }
   }
 
   let hasLiveQuotes = false;

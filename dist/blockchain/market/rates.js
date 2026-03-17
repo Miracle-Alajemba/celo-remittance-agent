@@ -31,8 +31,17 @@ const STATIC_RATES = {
 };
 const cache = new Map(Object.entries(STATIC_RATES));
 const lastUpdatedByBase = new Map();
+function isDemoFastMode() {
+    return process.env.DEMO_FAST_MODE === 'true';
+}
 function getCacheTtlMs() {
     return Number(process.env.FX_CACHE_TTL_MS || 300000);
+}
+function getFetchTimeoutMs() {
+    if (process.env.FX_FETCH_TIMEOUT_MS) {
+        return Number(process.env.FX_FETCH_TIMEOUT_MS);
+    }
+    return isDemoFastMode() ? 1500 : 8000;
 }
 function getBaseCurrencies() {
     const bases = new Set();
@@ -72,7 +81,10 @@ async function fetchRatesForBase(base) {
         headers['apikey'] = apiKey;
         headers['Authorization'] = `Bearer ${apiKey}`;
     }
-    const response = await axios_1.default.get(url, { headers, timeout: 8000 });
+    const response = await axios_1.default.get(url, {
+        headers,
+        timeout: getFetchTimeoutMs(),
+    });
     const data = response.data;
     if (!data || !data.rates)
         return;
@@ -105,6 +117,9 @@ async function getRateOrFetch(base, quote) {
     const lastUpdated = lastUpdatedByBase.get(base) || 0;
     const cached = getRate(base, quote);
     if (cached && Date.now() - lastUpdated <= ttlMs) {
+        return cached;
+    }
+    if (isDemoFastMode() && cached) {
         return cached;
     }
     try {

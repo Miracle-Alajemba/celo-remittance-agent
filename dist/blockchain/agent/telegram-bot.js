@@ -66,6 +66,7 @@ class TelegramBotHandler {
         this.bot.command('start', async (ctx) => {
             const user = this.registerUser(ctx);
             const agent = this.getOrCreateAgent(user.id);
+            agent.clearMemory();
             // Trigger the greeting flow in the Orchestrator
             const response = await agent.processMessage('hello');
             await this.sendResponse(ctx, response);

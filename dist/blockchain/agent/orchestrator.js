@@ -125,6 +125,12 @@ const COUNTRY_NAMES = {
     SN: { en: "Senegal", es: "Senegal", pt: "Senegal", fr: "Sénégal" },
 };
 class AgentOrchestrator {
+    getExecutionTimeoutMs() {
+        if (process.env.BLOCKCHAIN_EXECUTION_TIMEOUT_MS) {
+            return Number(process.env.BLOCKCHAIN_EXECUTION_TIMEOUT_MS);
+        }
+        return process.env.DEMO_FAST_MODE === "true" ? 15000 : 45000;
+    }
     constructor(userId = "default_user", walletAddress = "0x0000000000000000000000000000000000000000") {
         this.pendingWalletRequest = false;
         this.pendingSendIntent = null;
@@ -234,6 +240,35 @@ class AgentOrchestrator {
         if (this.pendingConfirmation) {
             return await this.handleConfirmation(userMessage);
         }
+        const orphanConfirmWords = [
+            "yes",
+            "si",
+            "sí",
+            "sim",
+            "oui",
+            "ok",
+            "proceed",
+            "confirm",
+        ];
+        const lowerUserMessage = userMessage.toLowerCase();
+        const looksLikeOrphanConfirmation = orphanConfirmWords.some((w) => lowerUserMessage.includes(w)) &&
+            /send|enviar|envoyer/.test(lowerUserMessage);
+        if (looksLikeOrphanConfirmation) {
+            const lang = preferredLang ||
+                this.memory.getLastIntent()?.detectedLanguage ||
+                "en";
+            const msg = lang === "es"
+                ? "⚠️ No tengo una transferencia pendiente para confirmar. Empieza con algo como: \"Envía $50 a Filipinas\"."
+                : lang === "pt"
+                    ? "⚠️ Não tenho nenhuma transferência pendente para confirmar. Comece com algo como: \"Envie $50 para Filipinas\"."
+                    : lang === "fr"
+                        ? "⚠️ Je n’ai aucun transfert en attente à confirmer. Commencez par quelque chose comme : \"Envoie 50$ aux Philippines\"."
+                        : '⚠️ I do not have a pending transfer to confirm. Start with something like: "Send $50 to the Philippines".';
+            return this.createResponse(msg, "text", lang, [
+                "Send money",
+                "Compare fees",
+            ]);
+        }
         // Parse intent (keyword-based as fallback)
         let intent = (0, intent_parser_1.parseRemittanceIntent)(userMessage);
         let lang = intent.detectedLanguage;
@@ -288,6 +323,12 @@ class AgentOrchestrator {
             intent.frequency);
         if (lastIntent && lastIntent.action === "send" && hasNewSendFields) {
             intent = this.mergeIntent(lastIntent, intent);
+        }
+        if (lastIntent &&
+            lastIntent.action === "send" &&
+            intent.action === "compare_fees") {
+            intent = this.mergeIntent(lastIntent, intent);
+            intent.action = "compare_fees";
         }
         this.memory.setLastIntent(intent);
         // Route to appropriate handler
@@ -537,9 +578,18 @@ class AgentOrchestrator {
             let transferAmount = intent.amount || "0";
             let transferCurrency = blockchainToken;
             // If both currencies exist on-chain, swap via Mento before transfer
-            const canSwap = blockchainToken.toLowerCase() !== targetToken.toLowerCase() &&
-                (await (0, mento_client_1.resolveTokenBySymbol)(blockchainToken)) &&
-                (await (0, mento_client_1.resolveTokenBySymbol)(targetToken));
+            let canSwap = false;
+            if (blockchainToken.toLowerCase() !== targetToken.toLowerCase()) {
+                try {
+                    const sourceTokenInfo = await (0, mento_client_1.resolveTokenBySymbol)(blockchainToken);
+                    const targetTokenInfo = await (0, mento_client_1.resolveTokenBySymbol)(targetToken);
+                    canSwap = Boolean(sourceTokenInfo && targetTokenInfo);
+                }
+                catch (error) {
+                    console.warn("[Confirmation] Mento token resolution failed, skipping swap path:", error);
+                    canSwap = false;
+                }
+            }
             if (canSwap) {
                 const maxSlippage = Number(process.env.MENTO_MAX_SLIPPAGE || 0.01);
                 const swapResult = await (0, mento_integration_1.executeSwap)(blockchainToken, targetToken, transferAmount, maxSlippage);
@@ -555,13 +605,29 @@ class AgentOrchestrator {
                 transferCurrency = targetToken;
             }
             // Execute blockchain transfer
-            const executionResult = await (0, transaction_executor_1.executeBlockchainTransfer)({
-                recipient: recipientAddress,
-                amount: transferAmount,
-                currency: transferCurrency,
-                recipientName: intent.recipientName || "Recipient",
-                recipientCountry: intent.recipientCountry || "",
-            });
+            let executionResult;
+            try {
+                executionResult = await Promise.race([
+                    (0, transaction_executor_1.executeBlockchainTransfer)({
+                        recipient: recipientAddress,
+                        amount: transferAmount,
+                        currency: transferCurrency,
+                        recipientName: intent.recipientName || "Recipient",
+                        recipientCountry: intent.recipientCountry || "",
+                    }),
+                    new Promise((_, reject) => {
+                        setTimeout(() => reject(new Error("Blockchain execution timed out while waiting for the RPC response.")), this.getExecutionTimeoutMs());
+                    }),
+                ]);
+            }
+            catch (error) {
+                executionResult = {
+                    success: false,
+                    error: error?.message ||
+                        "Blockchain execution timed out while waiting for the RPC response.",
+                    status: "failed",
+                };
+            }
             // Record transaction with actual blockchain result
             const txRecord = (0, transaction_history_1.recordTransaction)({
                 type: intent.frequency !== "once" ? "scheduled" : "send",
@@ -932,7 +998,9 @@ class AgentOrchestrator {
     }
     clearMemory() {
         this.memory.clear();
+        this.pendingSendIntent = null;
         this.pendingConfirmation = null;
+        this.pendingWalletRequest = false;
     }
     getNotificationChannels() {
         const raw = process.env.NOTIFY_CHANNELS;
