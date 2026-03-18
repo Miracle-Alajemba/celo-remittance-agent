@@ -46,7 +46,7 @@ function recordTransaction(params) {
             txHash: params.txHash,
             blockNumber: params.blockNumber,
             gasUsed: params.gasUsed,
-            network: 'Celo Alfajores',
+            network: params.network || 'Celo Sepolia',
         },
         scheduledTransferId: params.scheduledTransferId,
     };

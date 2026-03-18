@@ -65,6 +65,7 @@ export function recordTransaction(params: {
   txHash?: string;
   blockNumber?: number;
   gasUsed?: string;
+  network?: string;
   scheduledTransferId?: string;
 }): TransactionRecord {
   const id = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -94,7 +95,7 @@ export function recordTransaction(params: {
       txHash: params.txHash,
       blockNumber: params.blockNumber,
       gasUsed: params.gasUsed,
-      network: 'Celo Alfajores',
+      network: params.network || 'Celo Sepolia',
     },
     scheduledTransferId: params.scheduledTransferId,
   };
