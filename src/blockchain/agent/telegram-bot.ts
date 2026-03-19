@@ -7,6 +7,7 @@
 
 import { Telegraf, Context, Markup } from 'telegraf';
 import * as dotenv from 'dotenv';
+import https from 'https';
 import { AgentOrchestrator, AgentResponse } from './orchestrator';
 
 dotenv.config();
@@ -26,6 +27,7 @@ export class TelegramBotHandler {
   bot: Telegraf<Context>;
   agents: Map<number, AgentOrchestrator> = new Map();
   users: Map<number, TelegramUser> = new Map();
+  private readonly telegramAgent: https.Agent;
 
   constructor() {
     if (!TELEGRAM_BOT_TOKEN) {
@@ -33,7 +35,14 @@ export class TelegramBotHandler {
     }
 
     console.log('[Telegram] Initializing Bot...');
-    this.bot = new Telegraf(TELEGRAM_BOT_TOKEN);
+    // Force IPv4 for Telegram API calls. In this environment, Node HTTPS
+    // requests to api.telegram.org can time out on default resolution.
+    this.telegramAgent = new https.Agent({ family: 4 });
+    this.bot = new Telegraf(TELEGRAM_BOT_TOKEN, {
+      telegram: {
+        agent: this.telegramAgent,
+      },
+    });
     this.setupHandlers();
   }
 
@@ -248,8 +257,10 @@ export class TelegramBotHandler {
       // Graceful shutdown
       process.once('SIGINT', () => this.bot.stop('SIGINT'));
       process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
+      return true;
     } catch (error) {
       console.error('[Telegram] Failed to start bot:', error);
+      throw error;
     }
   }
 }

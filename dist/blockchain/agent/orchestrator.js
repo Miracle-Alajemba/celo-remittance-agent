@@ -29,7 +29,6 @@ const agentscan_1 = require("./agentscan");
 const services_1 = require("../../database/services");
 const connection_1 = require("../../database/connection");
 const notification_service_1 = require("./notification-service");
-const celo_provider_1 = require("../celo/celo-provider");
 const network_config_1 = require("../celo/network-config");
 // Multi-language response templates
 const RESPONSES = {
@@ -127,6 +126,30 @@ const COUNTRY_NAMES = {
     SN: { en: "Senegal", es: "Senegal", pt: "Senegal", fr: "Sénégal" },
 };
 class AgentOrchestrator {
+    isDirectAssetTransfer(sourceCurrency) {
+        const normalized = (sourceCurrency || "").trim().toUpperCase();
+        return normalized === "CELO";
+    }
+    buildDirectAssetRoute(asset, amount) {
+        return {
+            id: `route_direct_${asset.toLowerCase()}_${Date.now()}`,
+            path: [
+                {
+                    from: asset,
+                    to: asset,
+                    pool: `${asset} direct transfer`,
+                    rate: 1,
+                    feePercent: 0,
+                    estimatedGas: "0.001 CELO",
+                },
+            ],
+            totalFeePercent: 0,
+            totalFeeUSD: 0,
+            estimatedOutput: amount,
+            estimatedTimeMinutes: 1,
+            rating: "best",
+        };
+    }
     getExecutionTimeoutMs() {
         if (process.env.BLOCKCHAIN_EXECUTION_TIMEOUT_MS) {
             return Number(process.env.BLOCKCHAIN_EXECUTION_TIMEOUT_MS);
@@ -418,23 +441,33 @@ class AgentOrchestrator {
             this.memory.addMessage("agent", response.message);
             return response;
         }
-        // Find optimal route
         const sourceCurrency = intent.sourceCurrency || "USD";
-        const targetCurrency = intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry);
-        const routes = await (0, route_optimizer_1.findOptimalRoute)(sourceCurrency, targetCurrency, amount);
+        const isDirectAssetTransfer = this.isDirectAssetTransfer(sourceCurrency);
+        const targetCurrency = isDirectAssetTransfer
+            ? sourceCurrency
+            : intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry);
+        const routes = isDirectAssetTransfer
+            ? [this.buildDirectAssetRoute(sourceCurrency, amount)]
+            : await (0, route_optimizer_1.findOptimalRoute)(sourceCurrency, targetCurrency, amount);
         const bestRoute = routes[0];
         if (!bestRoute) {
             return this.createResponse("❌ No route found for this transfer corridor.", "error", lang);
         }
-        // Get fee comparison
-        const comparison = await (0, fee_comparator_1.compareFees)(amount, sourceCurrency, intent.recipientCountry || "PH");
+        const comparison = isDirectAssetTransfer
+            ? undefined
+            : await (0, fee_comparator_1.compareFees)(amount, sourceCurrency, intent.recipientCountry || "PH");
         // Build route info string
         let routeInfo = "";
         if (bestRoute.path.length > 1) {
             routeInfo = `🛤️ **Route:** ${bestRoute.path.map((h) => `${h.from}→${h.to}`).join(" → ")}`;
         }
         // Add fee comparison summary
-        routeInfo += `\n\n💡 **You save up to ${comparison.bestSavingsPercent}%** compared to traditional providers!`;
+        if (comparison) {
+            routeInfo += `\n\n💡 **You save up to ${comparison.bestSavingsPercent}%** compared to traditional providers!`;
+        }
+        else if (isDirectAssetTransfer) {
+            routeInfo += `\n\n🔗 **Transfer type:** Direct on-chain ${sourceCurrency} transfer`;
+        }
         // Build preview
         const countryName = COUNTRY_NAMES[intent.recipientCountry || ""]?.[lang] ||
             intent.recipientCountry ||
@@ -596,8 +629,11 @@ class AgentOrchestrator {
                 process.env.RECIPIENT_ADDRESS ||
                 "0x1234567890123456789012345678901234567890";
             const sourceCurrency = intent.sourceCurrency || "USD";
-            const targetCurrency = intent.targetCurrency ||
-                this.getTargetCurrency(intent.recipientCountry || "");
+            const isDirectAssetTransfer = this.isDirectAssetTransfer(sourceCurrency);
+            const targetCurrency = isDirectAssetTransfer
+                ? sourceCurrency
+                : intent.targetCurrency ||
+                    this.getTargetCurrency(intent.recipientCountry || "");
             // Map real-world currency to Celo Blockchain Token names
             const tokenMap = {
                 USD: "cUSD", // Map USD to Celo Dollar
@@ -612,7 +648,8 @@ class AgentOrchestrator {
             let transferCurrency = blockchainToken;
             // If both currencies exist on-chain, swap via Mento before transfer
             let canSwap = false;
-            if (blockchainToken.toLowerCase() !== targetToken.toLowerCase()) {
+            if (!isDirectAssetTransfer &&
+                blockchainToken.toLowerCase() !== targetToken.toLowerCase()) {
                 try {
                     const sourceTokenInfo = await (0, mento_client_1.resolveTokenBySymbol)(blockchainToken);
                     const targetTokenInfo = await (0, mento_client_1.resolveTokenBySymbol)(targetToken);
@@ -1108,10 +1145,6 @@ class AgentOrchestrator {
             return null;
         const normalized = walletAddress.trim();
         if (!normalized || normalized === "0x0000000000000000000000000000000000000000") {
-            return null;
-        }
-        if (celo_provider_1.celoProvider.wallet?.address &&
-            normalized.toLowerCase() === celo_provider_1.celoProvider.wallet.address.toLowerCase()) {
             return null;
         }
         return normalized;

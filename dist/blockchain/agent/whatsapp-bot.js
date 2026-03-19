@@ -44,14 +44,20 @@ const dotenv = __importStar(require("dotenv"));
 const orchestrator_1 = require("./orchestrator");
 const network_config_1 = require("../celo/network-config");
 dotenv.config();
+function hasValidTwilioConfig() {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID;
+    const authToken = process.env.TWILIO_AUTH_TOKEN;
+    return Boolean(accountSid &&
+        authToken &&
+        accountSid !== 'your_twilio_account_sid' &&
+        authToken !== 'your_twilio_auth_token');
+}
 class WhatsAppBotHandler {
     constructor() {
         this.agents = new Map();
         this.users = new Map();
         this.enabled = true;
-        const accountSid = process.env.TWILIO_ACCOUNT_SID;
-        const authToken = process.env.TWILIO_AUTH_TOKEN;
-        if (!accountSid || !authToken || accountSid === 'your_twilio_account_sid') {
+        if (!hasValidTwilioConfig()) {
             console.warn('[WhatsApp] Twilio credentials not configured - bot disabled');
             this.enabled = false;
             return;
@@ -77,6 +83,9 @@ class WhatsAppBotHandler {
             }
             user.lastMessage = new Date();
             user.messageCount++;
+            const trimmedMessage = message.trim();
+            const mappedQuickAction = this.mapQuickActionSelection(trimmedMessage, user.lastSuggestedActions);
+            const effectiveMessage = mappedQuickAction || trimmedMessage;
             // Get or create agent for this user
             let agent = this.agents.get(from);
             if (!agent) {
@@ -84,35 +93,34 @@ class WhatsAppBotHandler {
                 this.agents.set(from, agent);
             }
             // Handle special commands
-            if (message.toLowerCase() === '/help') {
+            if (effectiveMessage.toLowerCase() === '/help') {
+                user.lastSuggestedActions = undefined;
                 return this.getHelpMessage();
             }
-            if (message.toLowerCase() === '/balance') {
+            if (effectiveMessage.toLowerCase() === '/balance') {
+                user.lastSuggestedActions = undefined;
                 const response = await agent.processMessage('Check my balance');
-                return response.message;
+                return this.formatReply(response.message, response.suggestedActions, user);
             }
-            if (message.toLowerCase() === '/history') {
+            if (effectiveMessage.toLowerCase() === '/history') {
+                user.lastSuggestedActions = undefined;
                 const response = await agent.processMessage('Show my transaction history');
-                return response.message;
+                return this.formatReply(response.message, response.suggestedActions, user);
             }
-            if (message.toLowerCase() === '/start') {
+            if (effectiveMessage.toLowerCase() === '/start') {
+                agent.clearMemory();
+                user.lastSuggestedActions = undefined;
                 return this.getWelcomeMessage();
             }
-            if (message.toLowerCase() === '/status') {
+            if (effectiveMessage.toLowerCase() === '/status') {
+                user.lastSuggestedActions = undefined;
                 return this.getStatusMessage();
             }
             // Process regular message through agent
-            const response = await agent.processMessage(message);
-            let replyText = response.message;
-            // Add suggested actions
-            if (response.suggestedActions && response.suggestedActions.length > 0) {
-                replyText += '\n\n*Quick actions:*\n';
-                response.suggestedActions.forEach((action, i) => {
-                    replyText += `${i + 1}. ${action}\n`;
-                });
-            }
+            const response = await agent.processMessage(effectiveMessage);
+            const replyText = this.formatReply(response.message, response.suggestedActions, user);
             // Log message
-            console.log(`[WhatsApp] ${from}: ${message}`);
+            console.log(`[WhatsApp] ${from}: ${message}${mappedQuickAction ? ` -> ${mappedQuickAction}` : ''}`);
             return replyText;
         }
         catch (error) {
@@ -230,12 +238,39 @@ Send your first remittance request!`;
             enabled: this.enabled,
         };
     }
+    mapQuickActionSelection(message, suggestedActions) {
+        if (!suggestedActions || suggestedActions.length === 0) {
+            return null;
+        }
+        const match = message.match(/^\s*(\d+)\s*$/);
+        if (!match)
+            return null;
+        const index = Number(match[1]) - 1;
+        if (index < 0 || index >= suggestedActions.length) {
+            return null;
+        }
+        return suggestedActions[index];
+    }
+    formatReply(message, suggestedActions, user) {
+        let replyText = message;
+        user.lastSuggestedActions =
+            suggestedActions && suggestedActions.length > 0
+                ? [...suggestedActions]
+                : undefined;
+        if (suggestedActions && suggestedActions.length > 0) {
+            replyText += '\n\n*Quick actions:*\n';
+            suggestedActions.forEach((action, i) => {
+                replyText += `${i + 1}. ${action}\n`;
+            });
+        }
+        return replyText;
+    }
 }
 exports.WhatsAppBotHandler = WhatsAppBotHandler;
 // Singleton instance
 let whatsappBot = null;
 function getWhatsAppBot() {
-    if (!whatsappBot) {
+    if (!whatsappBot || (!whatsappBot.enabled && hasValidTwilioConfig())) {
         whatsappBot = new WhatsAppBotHandler();
     }
     return whatsappBot;

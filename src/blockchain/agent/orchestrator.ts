@@ -226,6 +226,35 @@ export class AgentOrchestrator {
   } | null = null;
   private isFirstInteraction: boolean = true;
 
+  private isDirectAssetTransfer(sourceCurrency?: string): boolean {
+    const normalized = (sourceCurrency || "").trim().toUpperCase();
+    return normalized === "CELO";
+  }
+
+  private buildDirectAssetRoute(
+    asset: string,
+    amount: number,
+  ): TransferRoute {
+    return {
+      id: `route_direct_${asset.toLowerCase()}_${Date.now()}`,
+      path: [
+        {
+          from: asset,
+          to: asset,
+          pool: `${asset} direct transfer`,
+          rate: 1,
+          feePercent: 0,
+          estimatedGas: "0.001 CELO",
+        },
+      ],
+      totalFeePercent: 0,
+      totalFeeUSD: 0,
+      estimatedOutput: amount,
+      estimatedTimeMinutes: 1,
+      rating: "best",
+    };
+  }
+
   private getExecutionTimeoutMs(): number {
     if (process.env.BLOCKCHAIN_EXECUTION_TIMEOUT_MS) {
       return Number(process.env.BLOCKCHAIN_EXECUTION_TIMEOUT_MS);
@@ -611,15 +640,15 @@ export class AgentOrchestrator {
       return response;
     }
 
-    // Find optimal route
     const sourceCurrency = intent.sourceCurrency || "USD";
-    const targetCurrency =
-      intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry);
-    const routes = await findOptimalRoute(
-      sourceCurrency,
-      targetCurrency,
-      amount,
-    );
+    const isDirectAssetTransfer = this.isDirectAssetTransfer(sourceCurrency);
+    const targetCurrency = isDirectAssetTransfer
+      ? sourceCurrency
+      : intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry);
+
+    const routes = isDirectAssetTransfer
+      ? [this.buildDirectAssetRoute(sourceCurrency, amount)]
+      : await findOptimalRoute(sourceCurrency, targetCurrency, amount);
     const bestRoute = routes[0];
 
     if (!bestRoute) {
@@ -630,12 +659,13 @@ export class AgentOrchestrator {
       );
     }
 
-    // Get fee comparison
-    const comparison = await compareFees(
-      amount,
-      sourceCurrency,
-      intent.recipientCountry || "PH",
-    );
+    const comparison = isDirectAssetTransfer
+      ? undefined
+      : await compareFees(
+          amount,
+          sourceCurrency,
+          intent.recipientCountry || "PH",
+        );
 
     // Build route info string
     let routeInfo = "";
@@ -644,7 +674,11 @@ export class AgentOrchestrator {
     }
 
     // Add fee comparison summary
-    routeInfo += `\n\n💡 **You save up to ${comparison.bestSavingsPercent}%** compared to traditional providers!`;
+    if (comparison) {
+      routeInfo += `\n\n💡 **You save up to ${comparison.bestSavingsPercent}%** compared to traditional providers!`;
+    } else if (isDirectAssetTransfer) {
+      routeInfo += `\n\n🔗 **Transfer type:** Direct on-chain ${sourceCurrency} transfer`;
+    }
 
     // Build preview
     const countryName =
@@ -847,9 +881,11 @@ export class AgentOrchestrator {
         process.env.RECIPIENT_ADDRESS ||
         "0x1234567890123456789012345678901234567890";
       const sourceCurrency = intent.sourceCurrency || "USD";
-      const targetCurrency =
-        intent.targetCurrency ||
-        this.getTargetCurrency(intent.recipientCountry || "");
+      const isDirectAssetTransfer = this.isDirectAssetTransfer(sourceCurrency);
+      const targetCurrency = isDirectAssetTransfer
+        ? sourceCurrency
+        : intent.targetCurrency ||
+          this.getTargetCurrency(intent.recipientCountry || "");
 
       // Map real-world currency to Celo Blockchain Token names
       const tokenMap: { [key: string]: string } = {
@@ -867,7 +903,10 @@ export class AgentOrchestrator {
 
       // If both currencies exist on-chain, swap via Mento before transfer
       let canSwap = false;
-      if (blockchainToken.toLowerCase() !== targetToken.toLowerCase()) {
+      if (
+        !isDirectAssetTransfer &&
+        blockchainToken.toLowerCase() !== targetToken.toLowerCase()
+      ) {
         try {
           const sourceTokenInfo = await resolveTokenBySymbol(blockchainToken);
           const targetTokenInfo = await resolveTokenBySymbol(targetToken);
@@ -1547,12 +1586,6 @@ export class AgentOrchestrator {
     if (!walletAddress) return null;
     const normalized = walletAddress.trim();
     if (!normalized || normalized === "0x0000000000000000000000000000000000000000") {
-      return null;
-    }
-    if (
-      celoProvider.wallet?.address &&
-      normalized.toLowerCase() === celoProvider.wallet.address.toLowerCase()
-    ) {
       return null;
     }
     return normalized;

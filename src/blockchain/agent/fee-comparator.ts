@@ -244,7 +244,8 @@ function buildEstimatedProviderQuote(params: {
   const percentFee = amount * (config.feePercent / 100);
   const totalFee = fixedFee + percentFee;
   const providerRate = midMarketRate * (1 - config.rateMarkup / 100);
-  const receiveAmount = (amount - totalFee) * providerRate;
+  const netSendAmount = Math.max(0, amount - totalFee);
+  const receiveAmount = netSendAmount * providerRate;
 
   return {
     provider,

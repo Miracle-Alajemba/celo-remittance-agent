@@ -8,6 +8,7 @@ import cors from "cors";
 import * as dotenv from "dotenv";
 import path from "path";
 import rateLimit from "express-rate-limit";
+import twilio from "twilio";
 import { AgentOrchestrator } from "./blockchain/agent/orchestrator";
 import {
   compareFees,
@@ -36,6 +37,7 @@ import { getX402Protocol } from "./blockchain/agent/x402-payment";
 import { getSkillsFramework } from "./blockchain/agent/celo-skills";
 import { getAgentScanner } from "./blockchain/agent/agentscan";
 import { startTelegramBot } from "./blockchain/agent/telegram-bot";
+import { getWhatsAppBot } from "./blockchain/agent/whatsapp-bot";
 import { connectDB, isDbConnected } from "./database/connection";
 import {
   getTransactionsByUser,
@@ -69,6 +71,7 @@ function parsePositiveAmount(value: any): number | null {
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, "../public")));
 
 const apiLimiter = rateLimit({
@@ -896,6 +899,113 @@ app.get(
   },
 );
 
+// ==================== WhatsApp Bot API ====================
+
+/**
+ * GET /api/whatsapp/status
+ * Get WhatsApp bot status
+ */
+app.get(
+  ["/api/whatsapp/status", "/api/wa/status"],
+  (req: express.Request, res: express.Response) => {
+    try {
+      const whatsappBot = getWhatsAppBot();
+      return res.json(whatsappBot.getStatus());
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  },
+);
+
+/**
+ * GET /api/whatsapp/users
+ * Get WhatsApp bot active users
+ */
+app.get(
+  ["/api/whatsapp/users", "/api/wa/users"],
+  (req: express.Request, res: express.Response) => {
+    try {
+      const whatsappBot = getWhatsAppBot();
+      return res.json({
+        count: whatsappBot.getActiveUsers().length,
+        users: whatsappBot.getActiveUsers(),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  },
+);
+
+/**
+ * POST /api/whatsapp/webhook
+ * Twilio WhatsApp webhook endpoint
+ */
+app.post(
+  ["/api/whatsapp/webhook", "/api/wa/webhook"],
+  async (req: express.Request, res: express.Response) => {
+    try {
+      const from = req.body?.From || req.body?.from || "";
+      const body = req.body?.Body || req.body?.body || "";
+      const normalizedFrom = String(from).replace(/^whatsapp:/i, "").trim();
+      const message = String(body).trim();
+
+      if (!normalizedFrom || !message) {
+        return res.status(400).json({
+          error: "Missing Twilio webhook fields: From and Body are required",
+        });
+      }
+
+      const whatsappBot = getWhatsAppBot();
+      const reply = await whatsappBot.handleIncomingMessage(
+        normalizedFrom,
+        message,
+      );
+
+      const twiml = new twilio.twiml.MessagingResponse();
+      twiml.message(reply);
+
+      res.type("text/xml");
+      return res.send(twiml.toString());
+    } catch (error: any) {
+      console.error("WhatsApp webhook error:", error);
+      const twiml = new twilio.twiml.MessagingResponse();
+      twiml.message(
+        "Sorry, something went wrong while processing your message. Please try again.",
+      );
+      res.type("text/xml");
+      return res.status(500).send(twiml.toString());
+    }
+  },
+);
+
+/**
+ * POST /api/whatsapp/test
+ * Local helper to simulate an inbound WhatsApp message without Twilio
+ */
+app.post(
+  ["/api/whatsapp/test", "/api/wa/test"],
+  async (req: express.Request, res: express.Response) => {
+    try {
+      const { from, message } = req.body;
+      if (!from || !message) {
+        return res
+          .status(400)
+          .json({ error: "from and message are required" });
+      }
+
+      const whatsappBot = getWhatsAppBot();
+      const reply = await whatsappBot.handleIncomingMessage(
+        String(from),
+        String(message),
+      );
+
+      return res.json({ from, message, reply });
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  },
+);
+
 // ==================== Bot Status Endpoint ====================
 
 /**
@@ -912,6 +1022,7 @@ app.get("/api/bots/status", (req: express.Request, res: express.Response) => {
       telegram: telegramBot
         ? telegramBot.getStatus()
         : { enabled: false, error: "Not initialized" },
+      whatsapp: getWhatsAppBot().getStatus(),
     });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });

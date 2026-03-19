@@ -10,12 +10,24 @@ import { getCeloNetworkLabel } from '../celo/network-config';
 
 dotenv.config();
 
+function hasValidTwilioConfig(): boolean {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  return Boolean(
+    accountSid &&
+      authToken &&
+      accountSid !== 'your_twilio_account_sid' &&
+      authToken !== 'your_twilio_auth_token'
+  );
+}
+
 export interface WhatsAppUser {
   phoneNumber: string;
   name?: string;
   walletAddress?: string;
   lastMessage?: Date;
   messageCount: number;
+  lastSuggestedActions?: string[];
 }
 
 export class WhatsAppBotHandler {
@@ -24,10 +36,7 @@ export class WhatsAppBotHandler {
   enabled: boolean = true;
 
   constructor() {
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-
-    if (!accountSid || !authToken || accountSid === 'your_twilio_account_sid') {
+    if (!hasValidTwilioConfig()) {
       console.warn('[WhatsApp] Twilio credentials not configured - bot disabled');
       this.enabled = false;
       return;
@@ -58,6 +67,13 @@ export class WhatsAppBotHandler {
       user.lastMessage = new Date();
       user.messageCount++;
 
+      const trimmedMessage = message.trim();
+      const mappedQuickAction = this.mapQuickActionSelection(
+        trimmedMessage,
+        user.lastSuggestedActions,
+      );
+      const effectiveMessage = mappedQuickAction || trimmedMessage;
+
       // Get or create agent for this user
       let agent = this.agents.get(from);
       if (!agent) {
@@ -69,43 +85,46 @@ export class WhatsAppBotHandler {
       }
 
       // Handle special commands
-      if (message.toLowerCase() === '/help') {
+      if (effectiveMessage.toLowerCase() === '/help') {
+        user.lastSuggestedActions = undefined;
         return this.getHelpMessage();
       }
 
-      if (message.toLowerCase() === '/balance') {
+      if (effectiveMessage.toLowerCase() === '/balance') {
+        user.lastSuggestedActions = undefined;
         const response = await agent.processMessage('Check my balance');
-        return response.message;
+        return this.formatReply(response.message, response.suggestedActions, user);
       }
 
-      if (message.toLowerCase() === '/history') {
+      if (effectiveMessage.toLowerCase() === '/history') {
+        user.lastSuggestedActions = undefined;
         const response = await agent.processMessage('Show my transaction history');
-        return response.message;
+        return this.formatReply(response.message, response.suggestedActions, user);
       }
 
-      if (message.toLowerCase() === '/start') {
+      if (effectiveMessage.toLowerCase() === '/start') {
+        agent.clearMemory();
+        user.lastSuggestedActions = undefined;
         return this.getWelcomeMessage();
       }
 
-      if (message.toLowerCase() === '/status') {
+      if (effectiveMessage.toLowerCase() === '/status') {
+        user.lastSuggestedActions = undefined;
         return this.getStatusMessage();
       }
 
       // Process regular message through agent
-      const response = await agent.processMessage(message);
-
-      let replyText = response.message;
-
-      // Add suggested actions
-      if (response.suggestedActions && response.suggestedActions.length > 0) {
-        replyText += '\n\n*Quick actions:*\n';
-        response.suggestedActions.forEach((action, i) => {
-          replyText += `${i + 1}. ${action}\n`;
-        });
-      }
+      const response = await agent.processMessage(effectiveMessage);
+      const replyText = this.formatReply(
+        response.message,
+        response.suggestedActions,
+        user,
+      );
 
       // Log message
-      console.log(`[WhatsApp] ${from}: ${message}`);
+      console.log(
+        `[WhatsApp] ${from}: ${message}${mappedQuickAction ? ` -> ${mappedQuickAction}` : ''}`,
+      );
 
       return replyText;
     } catch (error: any) {
@@ -232,13 +251,53 @@ Send your first remittance request!`;
       enabled: this.enabled,
     };
   }
+
+  private mapQuickActionSelection(
+    message: string,
+    suggestedActions?: string[],
+  ): string | null {
+    if (!suggestedActions || suggestedActions.length === 0) {
+      return null;
+    }
+
+    const match = message.match(/^\s*(\d+)\s*$/);
+    if (!match) return null;
+
+    const index = Number(match[1]) - 1;
+    if (index < 0 || index >= suggestedActions.length) {
+      return null;
+    }
+
+    return suggestedActions[index];
+  }
+
+  private formatReply(
+    message: string,
+    suggestedActions: string[] | undefined,
+    user: WhatsAppUser,
+  ): string {
+    let replyText = message;
+    user.lastSuggestedActions =
+      suggestedActions && suggestedActions.length > 0
+        ? [...suggestedActions]
+        : undefined;
+
+    if (suggestedActions && suggestedActions.length > 0) {
+      replyText += '\n\n*Quick actions:*\n';
+      suggestedActions.forEach((action, i) => {
+        replyText += `${i + 1}. ${action}\n`;
+      });
+    }
+
+    return replyText;
+  }
 }
 
 // Singleton instance
 let whatsappBot: WhatsAppBotHandler | null = null;
 
 export function getWhatsAppBot(): WhatsAppBotHandler {
-  if (!whatsappBot) {
+  if (!whatsappBot || (!whatsappBot.enabled && hasValidTwilioConfig())) {
     whatsappBot = new WhatsAppBotHandler();
   }
   return whatsappBot;
