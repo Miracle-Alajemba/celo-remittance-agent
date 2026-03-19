@@ -43,19 +43,11 @@ exports.getWalletBalance = getWalletBalance;
 exports.getAllWalletBalances = getAllWalletBalances;
 const ethers_1 = require("ethers");
 const celo_provider_1 = require("./celo/celo-provider");
+const network_config_1 = require("./celo/network-config");
 const mento_integration_1 = require("./mento/mento-integration");
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
-const STABLECOIN_ADDRESSES = {
-    USDm: '0x520b294f93c80aE2d195763E42645cD82F70e1e8',
-    EURm: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
-    BRLm: '0x25F93d1a8F4d2C3b3F4cBf55f5B8E97C3E9fA3BB',
-    COPm: '0x3F2D6B2E4cD3f5a6B7c8D9e0F1A2B3C4D5E6F7A8',
-    XOFm: '0x4A3B5C6D7E8F9A0B1C2D3E4F5A6B7C8D9E0F1A2B',
-    cUSD: '0x874069Fa1Eb16D44d622F2e0Ca25eeA172369bC1',
-    cEUR: '0x10c892A6EC43a53E45D0B916B4b7D383B1b4f9f9',
-    cREAL: '0xE4D517785D091D3c54818832dB6094bcc2744545',
-};
+const STABLECOIN_ADDRESSES = (0, network_config_1.getStablecoinAddresses)();
 const SYMBOL_ALIASES = {
     USD: 'cUSD',
     EUR: 'cEUR',

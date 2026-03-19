@@ -4,6 +4,7 @@
 
 import { isDbConnected } from '../../database/connection';
 import { getTransactionsByUser } from '../../database/services';
+import { getCeloNetworkLabel } from '../celo/network-config';
 
 export interface TransactionRecord {
   id: string;
@@ -95,7 +96,7 @@ export function recordTransaction(params: {
       txHash: params.txHash,
       blockNumber: params.blockNumber,
       gasUsed: params.gasUsed,
-      network: params.network || 'Celo Sepolia',
+      network: params.network || getCeloNetworkLabel(),
     },
     scheduledTransferId: params.scheduledTransferId,
   };
@@ -144,7 +145,7 @@ export async function getTransactionHistoryPersistent(
       txHash: t.txHash,
       blockNumber: t.blockNumber,
       gasUsed: t.gasUsed,
-      network: 'Celo Alfajores',
+      network: getCeloNetworkLabel(),
     },
   }));
 }

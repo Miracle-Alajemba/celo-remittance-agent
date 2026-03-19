@@ -36,12 +36,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.celoProvider = exports.CeloProvider = void 0;
 const ethers_1 = require("ethers");
 const dotenv = __importStar(require("dotenv"));
+const network_config_1 = require("./network-config");
 dotenv.config();
-const ALFAJORES_RPC = process.env.ALFAJORES_RPC || 'https://alfajores-forno.celo-testnet.org';
+const RPC_URL = (0, network_config_1.getCeloRpcUrl)();
 const PRIVATE_KEY = process.env.PRIVATE_KEY || '';
 class CeloProvider {
     constructor() {
-        this.provider = new ethers_1.ethers.JsonRpcProvider(ALFAJORES_RPC);
+        this.provider = new ethers_1.ethers.JsonRpcProvider(RPC_URL);
         this.wallet = new ethers_1.ethers.Wallet(PRIVATE_KEY, this.provider);
     }
     async getWalletAddress() {

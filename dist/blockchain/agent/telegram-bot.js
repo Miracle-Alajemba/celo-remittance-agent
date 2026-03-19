@@ -75,6 +75,7 @@ class TelegramBotHandler {
         this.bot.command('help', async (ctx) => {
             const user = this.registerUser(ctx);
             const agent = this.getOrCreateAgent(user.id);
+            agent.clearPendingTransferFlow();
             const response = await agent.processMessage('help');
             await this.sendResponse(ctx, response);
         });
@@ -82,6 +83,7 @@ class TelegramBotHandler {
         this.bot.command('balance', async (ctx) => {
             const user = this.registerUser(ctx);
             const agent = this.getOrCreateAgent(user.id);
+            agent.clearPendingTransferFlow();
             const response = await agent.processMessage('Check my balance');
             await this.sendResponse(ctx, response);
         });
@@ -89,6 +91,7 @@ class TelegramBotHandler {
         this.bot.command('history', async (ctx) => {
             const user = this.registerUser(ctx);
             const agent = this.getOrCreateAgent(user.id);
+            agent.clearPendingTransferFlow();
             const response = await agent.processMessage('Show my transaction history');
             await this.sendResponse(ctx, response);
         });
@@ -96,6 +99,7 @@ class TelegramBotHandler {
         this.bot.command('wallet', async (ctx) => {
             const user = this.registerUser(ctx);
             const agent = this.getOrCreateAgent(user.id);
+            agent.clearPendingTransferFlow();
             const response = await agent.processMessage('wallet');
             await this.sendResponse(ctx, response);
         });
@@ -185,10 +189,7 @@ class TelegramBotHandler {
      */
     getOrCreateAgent(userId) {
         if (!this.agents.has(userId)) {
-            // Import at runtime to avoid circular dependencies if any
-            const { celoProvider } = require('../celo/celo-provider');
-            const realWallet = celoProvider.wallet.address;
-            this.agents.set(userId, new orchestrator_1.AgentOrchestrator(`telegram_${userId}`, realWallet));
+            this.agents.set(userId, new orchestrator_1.AgentOrchestrator(`telegram_${userId}`));
         }
         return this.agents.get(userId);
     }

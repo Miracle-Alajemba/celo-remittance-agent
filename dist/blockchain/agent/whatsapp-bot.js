@@ -42,6 +42,7 @@ exports.WhatsAppBotHandler = void 0;
 exports.getWhatsAppBot = getWhatsAppBot;
 const dotenv = __importStar(require("dotenv"));
 const orchestrator_1 = require("./orchestrator");
+const network_config_1 = require("../celo/network-config");
 dotenv.config();
 class WhatsAppBotHandler {
     constructor() {
@@ -177,7 +178,7 @@ Visit: https://github.com/Miracle-Alajemba/celo-remittance-agent/issues`;
 
 ✅ Online and ready
 ⚡ Wallet: Connected
-🔗 Network: Celo Alfajores
+🔗 Network: ${(0, network_config_1.getCeloNetworkLabel)()}
 🔐 Secure connection: Active
 
 *Messages received:* ${this.users.size} users

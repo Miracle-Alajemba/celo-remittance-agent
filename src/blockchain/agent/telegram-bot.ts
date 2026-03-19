@@ -56,6 +56,7 @@ export class TelegramBotHandler {
     this.bot.command('help', async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
+      agent.clearPendingTransferFlow();
 
       const response = await agent.processMessage('help');
       await this.sendResponse(ctx, response);
@@ -65,6 +66,7 @@ export class TelegramBotHandler {
     this.bot.command('balance', async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
+      agent.clearPendingTransferFlow();
 
       const response = await agent.processMessage('Check my balance');
       await this.sendResponse(ctx, response);
@@ -74,6 +76,7 @@ export class TelegramBotHandler {
     this.bot.command('history', async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
+      agent.clearPendingTransferFlow();
 
       const response = await agent.processMessage('Show my transaction history');
       await this.sendResponse(ctx, response);
@@ -83,6 +86,7 @@ export class TelegramBotHandler {
     this.bot.command('wallet', async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
+      agent.clearPendingTransferFlow();
 
       const response = await agent.processMessage('wallet');
       await this.sendResponse(ctx, response);
@@ -191,14 +195,7 @@ export class TelegramBotHandler {
    */
   private getOrCreateAgent(userId: number): AgentOrchestrator {
     if (!this.agents.has(userId)) {
-      // Import at runtime to avoid circular dependencies if any
-      const { celoProvider } = require('../celo/celo-provider');
-      const realWallet = celoProvider.wallet.address;
-
-      this.agents.set(
-        userId,
-        new AgentOrchestrator(`telegram_${userId}`, realWallet)
-      );
+      this.agents.set(userId, new AgentOrchestrator(`telegram_${userId}`));
     }
     return this.agents.get(userId)!;
   }

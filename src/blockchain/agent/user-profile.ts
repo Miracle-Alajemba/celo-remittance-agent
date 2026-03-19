@@ -123,6 +123,43 @@ export async function getUser(userId: string): Promise<UserProfile | undefined> 
 }
 
 /**
+ * Get user profile by wallet address
+ */
+export async function getUserByWalletAddress(
+  walletAddress: string,
+): Promise<UserProfile | undefined> {
+  if (isDbConnected()) {
+    const user = await getUserByIdOrAddressDB(undefined, walletAddress);
+    if (!user) return undefined;
+    return {
+      userId: user.userId,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      country: user.country,
+      language: user.language,
+      walletAddress: user.walletAddress,
+      dailySpendingLimit: user.dailySpendingLimit,
+      monthlySpendingLimit: user.monthlySpendingLimit,
+      dailySpent: user.dailySpent,
+      monthlySpent: user.monthlySpent,
+      lastResetDate: user.lastResetDate,
+      preferredNotificationChannel: user.preferredNotificationChannel,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  const normalized = walletAddress.toLowerCase();
+  for (const user of users.values()) {
+    if (user.walletAddress?.toLowerCase() === normalized) {
+      return user;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Update user profile
  */
 export async function updateUserProfile(
@@ -167,7 +204,7 @@ export async function updateUserProfile(
     ...user,
     ...updates,
     userId: user.userId,
-    walletAddress: user.walletAddress,
+    walletAddress: updates.walletAddress ?? user.walletAddress,
     createdAt: user.createdAt,
     updatedAt: new Date(),
   };

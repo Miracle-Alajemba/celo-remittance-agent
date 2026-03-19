@@ -1,9 +1,10 @@
 import { ethers } from 'ethers';
 import * as dotenv from 'dotenv';
+import { getCeloRpcUrl } from './network-config';
 
 dotenv.config();
 
-const ALFAJORES_RPC = process.env.ALFAJORES_RPC || 'https://alfajores-forno.celo-testnet.org';
+const RPC_URL = getCeloRpcUrl();
 const PRIVATE_KEY = process.env.PRIVATE_KEY || '';
 
 export class CeloProvider {
@@ -11,7 +12,7 @@ export class CeloProvider {
   wallet: ethers.Wallet;
 
   constructor() {
-    this.provider = new ethers.JsonRpcProvider(ALFAJORES_RPC);
+    this.provider = new ethers.JsonRpcProvider(RPC_URL);
     this.wallet = new ethers.Wallet(PRIVATE_KEY, this.provider);
   }
 

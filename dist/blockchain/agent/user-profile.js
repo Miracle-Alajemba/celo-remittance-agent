@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.resetUserProfiles = resetUserProfiles;
 exports.getOrCreateUser = getOrCreateUser;
 exports.getUser = getUser;
+exports.getUserByWalletAddress = getUserByWalletAddress;
 exports.updateUserProfile = updateUserProfile;
 exports.checkSpendingLimit = checkSpendingLimit;
 exports.recordSpending = recordSpending;
@@ -95,6 +96,40 @@ async function getUser(userId) {
     return users.get(userId);
 }
 /**
+ * Get user profile by wallet address
+ */
+async function getUserByWalletAddress(walletAddress) {
+    if ((0, connection_1.isDbConnected)()) {
+        const user = await (0, services_1.getUserByIdOrAddress)(undefined, walletAddress);
+        if (!user)
+            return undefined;
+        return {
+            userId: user.userId,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            country: user.country,
+            language: user.language,
+            walletAddress: user.walletAddress,
+            dailySpendingLimit: user.dailySpendingLimit,
+            monthlySpendingLimit: user.monthlySpendingLimit,
+            dailySpent: user.dailySpent,
+            monthlySpent: user.monthlySpent,
+            lastResetDate: user.lastResetDate,
+            preferredNotificationChannel: user.preferredNotificationChannel,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt,
+        };
+    }
+    const normalized = walletAddress.toLowerCase();
+    for (const user of users.values()) {
+        if (user.walletAddress?.toLowerCase() === normalized) {
+            return user;
+        }
+    }
+    return undefined;
+}
+/**
  * Update user profile
  */
 async function updateUserProfile(userId, updates) {
@@ -134,7 +169,7 @@ async function updateUserProfile(userId, updates) {
         ...user,
         ...updates,
         userId: user.userId,
-        walletAddress: user.walletAddress,
+        walletAddress: updates.walletAddress ?? user.walletAddress,
         createdAt: user.createdAt,
         updatedAt: new Date(),
     };

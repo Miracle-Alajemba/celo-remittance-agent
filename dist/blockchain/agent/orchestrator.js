@@ -29,6 +29,8 @@ const agentscan_1 = require("./agentscan");
 const services_1 = require("../../database/services");
 const connection_1 = require("../../database/connection");
 const notification_service_1 = require("./notification-service");
+const celo_provider_1 = require("../celo/celo-provider");
+const network_config_1 = require("../celo/network-config");
 // Multi-language response templates
 const RESPONSES = {
     en: {
@@ -132,6 +134,9 @@ class AgentOrchestrator {
         return process.env.DEMO_FAST_MODE === "true" ? 15000 : 45000;
     }
     shouldSimulateTransferOnRpcFailure() {
+        if ((0, network_config_1.isMainnetMode)()) {
+            return false;
+        }
         if (process.env.DEMO_SIMULATE_ON_RPC_FAILURE) {
             return process.env.DEMO_SIMULATE_ON_RPC_FAILURE === "true";
         }
@@ -181,15 +186,16 @@ class AgentOrchestrator {
         const preferredLang = existingProfile?.language ||
             this.memory.getUserProfile().preferredLanguage;
         // ===== LOAD WALLET FROM DATABASE IF SAVED ===== (FIX: reload wallet on each message)
-        if (existingProfile?.walletAddress) {
-            this.walletAddress = existingProfile.walletAddress;
+        const savedWalletAddress = this.getUserWalletAddress(existingProfile?.walletAddress);
+        if (savedWalletAddress) {
+            this.walletAddress = savedWalletAddress;
             this.memory.setUserProfile({
-                walletAddress: existingProfile.walletAddress,
+                walletAddress: savedWalletAddress,
             });
         }
         // ===== CHECK IF USER HAS WALLET - ENFORCE WALLET FIRST =====
-        const hasWallet = existingProfile?.walletAddress ||
-            this.walletAddress !== "0x0000000000000000000000000000000000000000";
+        const hasWallet = Boolean(savedWalletAddress) ||
+            Boolean(this.getUserWalletAddress(this.walletAddress));
         if (hasWallet) {
             this.isFirstInteraction = false;
         }
@@ -198,15 +204,8 @@ class AgentOrchestrator {
         if (directAddress &&
             !this.pendingSendIntent &&
             /wallet|address|cartera|billetera|carteira|portefeuille/i.test(userMessage)) {
-            await (0, user_profile_1.updateUserProfile)(this.userId, { walletAddress: directAddress });
-            this.walletAddress = directAddress;
-            this.memory.setUserProfile({ walletAddress: directAddress });
-            this.pendingWalletRequest = false;
-            // Auto-show balance after wallet is set
             const lang = preferredLang || "en";
-            const balanceResponse = await this.handleBalanceCheck(lang);
-            this.memory.addMessage("agent", balanceResponse.message);
-            return balanceResponse;
+            return await this.saveSenderWalletAddress(directAddress, lang, "balance");
         }
         // Handle pending send intent slot-filling
         if (this.pendingSendIntent) {
@@ -229,43 +228,9 @@ class AgentOrchestrator {
         if (this.pendingWalletRequest) {
             const address = this.extractAddress(userMessage);
             if (address) {
-                await (0, user_profile_1.updateUserProfile)(this.userId, { walletAddress: address });
-                this.walletAddress = address;
-                this.memory.setUserProfile({ walletAddress: address });
-                this.pendingWalletRequest = false;
                 const lang = preferredLang || "en";
                 const requestSource = this.pendingWalletRequestSource;
-                this.pendingWalletRequestSource = "onboarding";
-                if (requestSource === "balance") {
-                    const balanceResponse = await this.handleBalanceCheck(lang);
-                    this.memory.addMessage("agent", balanceResponse.message);
-                    return balanceResponse;
-                }
-                if (requestSource === "wallet") {
-                    const savedMsg = lang === "es"
-                        ? `✅ He guardado tu billetera remitente: ${address}`
-                        : lang === "pt"
-                            ? `✅ Salvei sua carteira remetente: ${address}`
-                            : lang === "fr"
-                                ? `✅ J’ai enregistré votre portefeuille expéditeur : ${address}`
-                                : `✅ I’ve saved your sender wallet address: ${address}`;
-                    return this.createResponse(savedMsg, "text", lang, [
-                        "Check balance",
-                        "Send money",
-                    ]);
-                }
-                const readyMsg = lang === "es"
-                    ? `✅ Tu billetera remitente ha sido guardada.\n\nAhora ya puedes decir algo como "Envía $50 a mi mamá en Nigeria". Después te pediré la dirección del destinatario.`
-                    : lang === "pt"
-                        ? `✅ Sua carteira remetente foi salva.\n\nAgora voce pode dizer algo como "Envie $50 para minha mae na Nigeria". Depois eu vou pedir o endereco do destinatario.`
-                        : lang === "fr"
-                            ? `✅ Votre portefeuille expéditeur a été enregistré.\n\nVous pouvez maintenant dire quelque chose comme "Envoie 50$ à ma mère au Nigeria". Ensuite, je vous demanderai l’adresse du destinataire.`
-                            : `✅ Your sender wallet has been saved.\n\nYou can now say something like "Send $50 to my mum in Nigeria". After that, I’ll ask for the recipient’s wallet address.`;
-                return this.createResponse(readyMsg, "text", lang, [
-                    "Send money",
-                    "Check balance",
-                    "Compare fees",
-                ]);
+                return await this.saveSenderWalletAddress(address, lang, requestSource);
             }
             else {
                 // No wallet address found - keep asking
@@ -296,12 +261,12 @@ class AgentOrchestrator {
             this.pendingWalletRequest = true;
             this.pendingWalletRequestSource = "onboarding";
             const onboardingMsg = lang === "es"
-                ? "👋 Bienvenido. Antes de enviar dinero, necesito tu propia dirección de billetera remitente (0x...). Después, cuando hagas una transferencia, te pediré la dirección del destinatario."
+                ? "👋 Bienvenido. Antes de enviar dinero, necesito tu propia dirección de billetera remitente (0x...). En cuanto la envíes, te mostraré tu saldo."
                 : lang === "pt"
-                    ? "👋 Bem-vindo. Antes de enviar dinheiro, preciso do seu proprio endereco de carteira remetente (0x...). Depois, quando voce iniciar uma transferencia, vou pedir o endereco do destinatario."
+                    ? "👋 Bem-vindo. Antes de enviar dinheiro, preciso do seu proprio endereco de carteira remetente (0x...). Assim que voce enviar, eu mostro seu saldo."
                     : lang === "fr"
-                        ? "👋 Bienvenue. Avant d’envoyer de l’argent, j’ai besoin de votre propre adresse de portefeuille expéditeur (0x...). Ensuite, lors d’un transfert, je demanderai l’adresse du destinataire."
-                        : "👋 Welcome. Before sending money, I need your own sender wallet address (0x...). After that, when you start a transfer, I’ll ask for the recipient’s wallet address.";
+                        ? "👋 Bienvenue. Avant d’envoyer de l’argent, j’ai besoin de votre propre adresse de portefeuille expéditeur (0x...). Dès que vous l’envoyez, je vous montre votre solde."
+                        : "👋 Welcome to Celo Remittance Agent. I help you send money globally, compare fees, and track transfers using Celo stablecoins.\n\nTo get started, please share your own sender wallet address (0x...). Once I have it, I’ll show your balance and you’ll be ready to make a transfer.";
             return this.createResponse(onboardingMsg, "text", lang);
         }
         // Check for confirmation of pending transfer
@@ -725,9 +690,7 @@ class AgentOrchestrator {
                 blockNumber: resolvedExecutionResult.blockNumber ||
                     Math.floor(Math.random() * 1000000) + 20000000,
                 gasUsed: resolvedExecutionResult.gasUsed || "21000",
-                network: shouldUseSimulatedReceipt
-                    ? "Celo Sepolia (simulated fallback)"
-                    : "Celo Sepolia",
+                network: (0, network_config_1.getCeloNetworkLabel)(shouldUseSimulatedReceipt),
             });
             if ((0, connection_1.isDbConnected)()) {
                 try {
@@ -1018,12 +981,12 @@ class AgentOrchestrator {
             this.pendingWalletRequest = true;
             this.pendingWalletRequestSource = "onboarding";
             const onboardingMsg = lang === "es"
-                ? "👋 Bienvenido. Primero envíame tu propia dirección de billetera remitente (0x...). Después, cuando quieras enviar dinero, te pediré la dirección del destinatario."
+                ? "👋 Bienvenido. Primero envíame tu propia dirección de billetera remitente (0x...). Después te mostraré tu saldo."
                 : lang === "pt"
-                    ? "👋 Bem-vindo. Primeiro me envie seu proprio endereco de carteira remetente (0x...). Depois, quando quiser enviar dinheiro, eu pedirei o endereco do destinatario."
+                    ? "👋 Bem-vindo. Primeiro me envie seu proprio endereco de carteira remetente (0x...). Depois eu mostro seu saldo."
                     : lang === "fr"
-                        ? "👋 Bienvenue. Envoyez-moi d’abord votre propre adresse de portefeuille expéditeur (0x...). Ensuite, quand vous voudrez envoyer de l’argent, je demanderai l’adresse du destinataire."
-                        : "👋 Welcome. First, send me your own sender wallet address (0x...). Then, when you want to send money, I’ll ask for the recipient’s wallet address.";
+                        ? "👋 Bienvenue. Envoyez-moi d’abord votre propre adresse de portefeuille expéditeur (0x...). Ensuite, je vous montrerai votre solde."
+                        : "👋 Welcome to Celo Remittance Agent. I can help you send money globally, compare remittance fees, and track your transfers.\n\nBefore we begin, please share your own sender wallet address (0x...). Once I have it, I’ll show your balance.";
             return this.createResponse(onboardingMsg, "text", lang);
         }
         const responses = RESPONSES[lang] || RESPONSES["en"];
@@ -1038,6 +1001,82 @@ class AgentOrchestrator {
     }
     createResponse(message, type, lang, suggestedActions) {
         return { message, type, language: lang, suggestedActions };
+    }
+    async saveSenderWalletAddress(address, lang, requestSource) {
+        const existingWalletOwner = await (0, user_profile_1.getUserByWalletAddress)(address);
+        if (existingWalletOwner && existingWalletOwner.userId !== this.userId) {
+            this.pendingWalletRequest = true;
+            this.pendingWalletRequestSource = requestSource;
+            const conflictMsg = lang === "es"
+                ? "⚠️ Esta dirección de billetera ya está vinculada a otra cuenta. Usa una billetera diferente o contacta al soporte."
+                : lang === "pt"
+                    ? "⚠️ Esse endereco de carteira ja esta vinculado a outra conta. Use outra carteira ou fale com o suporte."
+                    : lang === "fr"
+                        ? "⚠️ Cette adresse de portefeuille est déjà liée à un autre compte. Utilisez un autre portefeuille ou contactez le support."
+                        : "⚠️ This wallet address is already linked to another account. Please use a different wallet or contact support.";
+            return this.createResponse(conflictMsg, "error", lang, [
+                "Use another wallet",
+                "Help",
+            ]);
+        }
+        await (0, user_profile_1.updateUserProfile)(this.userId, { walletAddress: address });
+        this.walletAddress = address;
+        this.memory.setUserProfile({ walletAddress: address });
+        this.pendingWalletRequest = false;
+        this.pendingWalletRequestSource = "onboarding";
+        const isReturningWallet = Boolean(existingWalletOwner && existingWalletOwner.userId === this.userId);
+        if (requestSource === "balance") {
+            const balanceResponse = await this.handleBalanceCheck(lang);
+            this.memory.addMessage("agent", balanceResponse.message);
+            return balanceResponse;
+        }
+        if (requestSource === "wallet") {
+            const savedMsg = isReturningWallet
+                ? lang === "es"
+                    ? `👋 Bienvenido de nuevo. Esta ya es tu billetera remitente: ${address}`
+                    : lang === "pt"
+                        ? `👋 Bem-vindo de volta. Esta ja e sua carteira remetente: ${address}`
+                        : lang === "fr"
+                            ? `👋 Bon retour. C’est déjà votre portefeuille expéditeur : ${address}`
+                            : `👋 Welcome back. This is already your sender wallet: ${address}`
+                : lang === "es"
+                    ? `✅ He guardado tu billetera remitente: ${address}`
+                    : lang === "pt"
+                        ? `✅ Salvei sua carteira remetente: ${address}`
+                        : lang === "fr"
+                            ? `✅ J’ai enregistré votre portefeuille expéditeur : ${address}`
+                            : `✅ I’ve saved your sender wallet address: ${address}`;
+            return this.createResponse(savedMsg, "text", lang, [
+                "Check balance",
+                "Send money",
+            ]);
+        }
+        const intro = isReturningWallet
+            ? lang === "es"
+                ? "👋 Bienvenido de nuevo. Esta billetera ya estaba conectada.\n\nAquí está tu saldo actual:"
+                : lang === "pt"
+                    ? "👋 Bem-vindo de volta. Essa carteira ja estava conectada.\n\nAqui esta seu saldo atual:"
+                    : lang === "fr"
+                        ? "👋 Bon retour. Ce portefeuille était déjà connecté.\n\nVoici votre solde actuel :"
+                        : "👋 Welcome back. This wallet was already connected.\n\nHere is your current balance:"
+            : lang === "es"
+                ? "✅ Tu billetera remitente ha sido guardada.\n\nAquí está tu saldo actual:"
+                : lang === "pt"
+                    ? "✅ Sua carteira remetente foi salva.\n\nAqui esta seu saldo atual:"
+                    : lang === "fr"
+                        ? "✅ Votre portefeuille expéditeur a été enregistré.\n\nVoici votre solde actuel :"
+                        : "✅ Your sender wallet has been saved.\n\nHere is your current balance:";
+        const balanceResponse = await this.handleBalanceCheck(lang);
+        const outro = lang === "es"
+            ? "Cuando quieras enviar dinero, te pediré la dirección del destinatario."
+            : lang === "pt"
+                ? "Quando voce quiser enviar dinheiro, eu vou pedir o endereco do destinatario."
+                : lang === "fr"
+                    ? "Quand vous voudrez envoyer de l’argent, je demanderai l’adresse du destinataire."
+                    : "When you want to send money, I’ll ask for the recipient’s wallet address.";
+        const response = this.createResponse(`${intro}\n\n${balanceResponse.message}\n\n${outro}`, "text", lang, balanceResponse.suggestedActions || ["Send money", "Compare fees"]);
+        this.memory.addMessage("agent", response.message);
+        return response;
     }
     extractAddress(text) {
         const match = text.match(/(0x[a-fA-F0-9]{40})/);
@@ -1067,7 +1106,15 @@ class AgentOrchestrator {
     getUserWalletAddress(walletAddress) {
         if (!walletAddress)
             return null;
-        return walletAddress;
+        const normalized = walletAddress.trim();
+        if (!normalized || normalized === "0x0000000000000000000000000000000000000000") {
+            return null;
+        }
+        if (celo_provider_1.celoProvider.wallet?.address &&
+            normalized.toLowerCase() === celo_provider_1.celoProvider.wallet.address.toLowerCase()) {
+            return null;
+        }
+        return normalized;
     }
     getTargetCurrency(countryCode) {
         const map = {
@@ -1096,6 +1143,10 @@ class AgentOrchestrator {
         this.pendingConfirmation = null;
         this.pendingWalletRequest = false;
         this.pendingWalletRequestSource = "onboarding";
+    }
+    clearPendingTransferFlow() {
+        this.pendingSendIntent = null;
+        this.pendingConfirmation = null;
     }
     getNotificationChannels() {
         const raw = process.env.NOTIFY_CHANNELS;

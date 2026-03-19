@@ -6,6 +6,7 @@
 
 import * as dotenv from 'dotenv';
 import { AgentOrchestrator } from './orchestrator';
+import { getCeloNetworkLabel } from '../celo/network-config';
 
 dotenv.config();
 
@@ -173,7 +174,7 @@ Visit: https://github.com/Miracle-Alajemba/celo-remittance-agent/issues`;
 
 ✅ Online and ready
 ⚡ Wallet: Connected
-🔗 Network: Celo Alfajores
+🔗 Network: ${getCeloNetworkLabel()}
 🔐 Secure connection: Active
 
 *Messages received:* ${this.users.size} users

@@ -1,11 +1,11 @@
 import * as dotenv from "dotenv";
 import { Mento } from "@mento-protocol/mento-sdk";
 import { Contract, Wallet, providers } from "ethers5";
+import { getCeloRpcUrl } from "../celo/network-config";
 
 dotenv.config();
 
-const DEFAULT_RPC = "https://alfajores-forno.celo-testnet.org";
-const RPC_URL = process.env.ALFAJORES_RPC || DEFAULT_RPC;
+const RPC_URL = getCeloRpcUrl();
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 
 export type TokenInfo = { address: string; symbol: string };

@@ -14,6 +14,7 @@ exports.getTransactionSummaryFromRecords = getTransactionSummaryFromRecords;
 exports.formatTransactionHistory = formatTransactionHistory;
 const connection_1 = require("../../database/connection");
 const services_1 = require("../../database/services");
+const network_config_1 = require("../celo/network-config");
 // In-memory transaction store
 const transactions = [];
 function resetTransactionHistory() {
@@ -46,7 +47,7 @@ function recordTransaction(params) {
             txHash: params.txHash,
             blockNumber: params.blockNumber,
             gasUsed: params.gasUsed,
-            network: params.network || 'Celo Sepolia',
+            network: params.network || (0, network_config_1.getCeloNetworkLabel)(),
         },
         scheduledTransferId: params.scheduledTransferId,
     };
@@ -88,7 +89,7 @@ async function getTransactionHistoryPersistent(userId, limit = 10) {
             txHash: t.txHash,
             blockNumber: t.blockNumber,
             gasUsed: t.gasUsed,
-            network: 'Celo Alfajores',
+            network: (0, network_config_1.getCeloNetworkLabel)(),
         },
     }));
 }

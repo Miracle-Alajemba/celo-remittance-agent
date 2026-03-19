@@ -16,5 +16,7 @@ export function isEnvSet(name: string): boolean {
 
 export function validateCoreConfig(): void {
   requireEnv('PRIVATE_KEY');
-  requireEnv('ALFAJORES_RPC');
+  if (!process.env.CELO_RPC_URL && !process.env.ALFAJORES_RPC) {
+    throw new Error('Missing required env var: CELO_RPC_URL (or legacy ALFAJORES_RPC)');
+  }
 }
