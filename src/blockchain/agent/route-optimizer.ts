@@ -209,7 +209,9 @@ async function buildOnChainRoutes(
 function buildFxRoutes(sourceCurrency: string, targetCurrency: string, amount: number): TransferRoute[] {
   const routes: TransferRoute[] = [];
 
-  const forexRate = getFxRate(sourceCurrency, targetCurrency);
+  const sourceFiat = toFiatSymbol(sourceCurrency);
+  const targetFiat = toFiatSymbol(targetCurrency);
+  const forexRate = getFxRate(sourceFiat, targetFiat);
   if (forexRate) {
     const celoFee = 0.30;
     const fee = amount * (celoFee / 100);

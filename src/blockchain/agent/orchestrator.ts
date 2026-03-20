@@ -58,6 +58,7 @@ import {
 } from "./notification-service";
 import { celoProvider } from "../celo/celo-provider";
 import { getCeloNetworkLabel, isMainnetMode } from "../celo/network-config";
+import { getRate as getFxRate } from "../market/rates";
 
 export interface AgentResponse {
   message: string;
@@ -223,6 +224,9 @@ export class AgentOrchestrator {
     intent: RemittanceIntent;
     route: TransferRoute;
     comparison?: FeeComparison;
+    executionSourceCurrency?: string;
+    executionSourceAmount?: string;
+    executionSourceNote?: string;
   } | null = null;
   private pendingSwapConfirmation: {
     intent: RemittanceIntent;
@@ -242,6 +246,142 @@ export class AgentOrchestrator {
   private isDirectAssetTransfer(sourceCurrency?: string): boolean {
     const normalized = (sourceCurrency || "").trim().toUpperCase();
     return normalized === "CELO";
+  }
+
+  private mapToBlockchainToken(symbol?: string): string {
+    const tokenMap: { [key: string]: string } = {
+      USD: "cUSD",
+      EUR: "cEUR",
+      BRL: "BRLm",
+      COP: "COPm",
+      XOF: "XOFm",
+      GHS: "GHSm",
+      KES: "KESm",
+      NGN: "NGNm",
+      PHP: "PHPm",
+      GBP: "GBPm",
+      INR: "INRm",
+      MXN: "MXNm",
+    };
+    const normalized = (symbol || "").trim();
+    return tokenMap[normalized] || normalized;
+  }
+
+  private toFiatCurrency(symbol?: string): string {
+    const normalized = (symbol || "").trim().toLowerCase();
+    const map: { [key: string]: string } = {
+      cusd: "USD",
+      usdm: "USD",
+      usdc: "USD",
+      usd: "USD",
+      ceur: "EUR",
+      eurm: "EUR",
+      eur: "EUR",
+      brlm: "BRL",
+      brl: "BRL",
+      copm: "COP",
+      cop: "COP",
+      xofm: "XOF",
+      xof: "XOF",
+      ghsm: "GHS",
+      ghs: "GHS",
+      kesm: "KES",
+      kes: "KES",
+      ngnm: "NGN",
+      ngn: "NGN",
+      phpm: "PHP",
+      php: "PHP",
+      gbpm: "GBP",
+      gbp: "GBP",
+      inrm: "INR",
+      inr: "INR",
+      mxnm: "MXN",
+      mxn: "MXN",
+      celo: "CELO",
+    };
+    return map[normalized] || (symbol || "").toUpperCase();
+  }
+
+  private formatAmount(value: number, maxDecimals: number = 6): string {
+    if (!Number.isFinite(value)) return "0";
+    return value
+      .toFixed(maxDecimals)
+      .replace(/\.?0+$/, "");
+  }
+
+  private async getCurrentSenderWalletAddress(): Promise<string | null> {
+    const profile = this.memory.getUserProfile();
+    const user = await getUser(this.userId);
+    return (
+      this.getUserWalletAddress(profile.walletAddress) ||
+      this.getUserWalletAddress(user?.walletAddress) ||
+      this.getUserWalletAddress(this.walletAddress) ||
+      null
+    );
+  }
+
+  private async resolveExecutionFundingPlan(
+    requestedSourceCurrency: string,
+    amount: number,
+  ): Promise<{
+    executionSourceCurrency: string;
+    executionSourceAmount: string;
+    note?: string;
+  }> {
+    const requestedToken = this.mapToBlockchainToken(requestedSourceCurrency);
+    const walletAddress = await this.getCurrentSenderWalletAddress();
+    if (!walletAddress) {
+      return {
+        executionSourceCurrency: requestedSourceCurrency,
+        executionSourceAmount: this.formatAmount(amount),
+      };
+    }
+
+    const balances = await getAllWalletBalances(walletAddress);
+    const requestedBalance = parseFloat(balances[requestedToken] || "0");
+    if (requestedBalance >= amount - 1e-9) {
+      return {
+        executionSourceCurrency: requestedSourceCurrency,
+        executionSourceAmount: this.formatAmount(amount),
+      };
+    }
+
+    const requestedFiat = this.toFiatCurrency(requestedSourceCurrency);
+    const fallbackCandidates = [
+      "cUSD",
+      "USDm",
+      "USDC",
+      "cEUR",
+      "EURm",
+      "GBPm",
+      "BRLm",
+    ];
+
+    for (const candidateToken of fallbackCandidates) {
+      if (candidateToken.toLowerCase() === requestedToken.toLowerCase()) continue;
+      const candidateBalance = parseFloat(balances[candidateToken] || "0");
+      if (!(candidateBalance > 0)) continue;
+
+      const candidateFiat = this.toFiatCurrency(candidateToken);
+      const fxRate = getFxRate(requestedFiat, candidateFiat);
+      if (!fxRate || !Number.isFinite(fxRate) || fxRate <= 0) continue;
+
+      const requiredCandidateAmount = amount * fxRate;
+      if (candidateBalance + 1e-9 < requiredCandidateAmount) continue;
+
+      return {
+        executionSourceCurrency: candidateToken,
+        executionSourceAmount: this.formatAmount(requiredCandidateAmount),
+        note: `💡 Funding route: ${requestedSourceCurrency} is being quoted for the user, but this transfer will fund from your available ${candidateToken} balance (~${this.formatAmount(
+          requiredCandidateAmount,
+        )} ${candidateToken}) before converting to the recipient currency.`,
+      };
+    }
+
+    return {
+      executionSourceCurrency: requestedSourceCurrency,
+      executionSourceAmount: this.formatAmount(amount),
+    };
   }
 
   private buildDirectAssetRoute(
@@ -477,6 +617,18 @@ export class AgentOrchestrator {
     const earlyIntent = parseRemittanceIntent(userMessage);
     const normalizedEarlyAction = earlyIntent.action;
     const isSlashCommand = userMessage.trim().startsWith("/");
+    const lowerEarlyMessage = userMessage.toLowerCase().trim();
+    const looksLikeTransferConfirmation =
+      /yes|si|sí|sim|oui|ok|proceed|confirm|send it|enviar|envoyer/.test(
+        lowerEarlyMessage,
+      ) ||
+      /cancel|cancelar|annuler|stop|non|no/.test(lowerEarlyMessage) ||
+      /comparison|comparar|comparação|comparaison|compare/.test(
+        lowerEarlyMessage,
+      );
+    const looksLikeSwapConfirmation =
+      /execute swap|swap now|confirm|yes|ok/.test(lowerEarlyMessage) ||
+      /cancel|no/.test(lowerEarlyMessage);
     const startsNewFlow =
       isSlashCommand ||
       normalizedEarlyAction === "send" ||
@@ -490,18 +642,24 @@ export class AgentOrchestrator {
 
     // Check for confirmation of pending transfer
     if (this.pendingConfirmation) {
+      if (looksLikeTransferConfirmation) {
+        return await this.handleConfirmation(userMessage);
+      }
       if (startsNewFlow) {
         this.pendingConfirmation = null;
       } else {
-      return await this.handleConfirmation(userMessage);
+        return await this.handleConfirmation(userMessage);
       }
     }
 
     if (this.pendingSwapConfirmation) {
+      if (looksLikeSwapConfirmation) {
+        return await this.handleSwapConfirmation(userMessage);
+      }
       if (startsNewFlow) {
         this.pendingSwapConfirmation = null;
       } else {
-      return await this.handleSwapConfirmation(userMessage);
+        return await this.handleSwapConfirmation(userMessage);
       }
     }
 
@@ -515,7 +673,7 @@ export class AgentOrchestrator {
       "proceed",
       "confirm",
     ];
-    const lowerUserMessage = userMessage.toLowerCase();
+    const lowerUserMessage = lowerEarlyMessage;
     const looksLikeOrphanConfirmation =
       orphanConfirmWords.some((w) => lowerUserMessage.includes(w)) &&
       /send|enviar|envoyer/.test(lowerUserMessage);
@@ -702,13 +860,28 @@ export class AgentOrchestrator {
 
     const sourceCurrency = intent.sourceCurrency || "USD";
     const isDirectAssetTransfer = this.isDirectAssetTransfer(sourceCurrency);
+    const fundingPlan = isDirectAssetTransfer
+      ? {
+          executionSourceCurrency: sourceCurrency,
+          executionSourceAmount: this.formatAmount(amount),
+        }
+      : await this.resolveExecutionFundingPlan(sourceCurrency, amount);
     const targetCurrency = isDirectAssetTransfer
       ? sourceCurrency
       : intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry);
+    const previewRouteSourceCurrency =
+      fundingPlan.executionSourceCurrency || sourceCurrency;
+    const previewRouteAmount = parseFloat(
+      fundingPlan.executionSourceAmount || this.formatAmount(amount),
+    );
 
     const routes = isDirectAssetTransfer
       ? [this.buildDirectAssetRoute(sourceCurrency, amount)]
-      : await findOptimalRoute(sourceCurrency, targetCurrency, amount);
+      : await findOptimalRoute(
+          previewRouteSourceCurrency,
+          targetCurrency,
+          previewRouteAmount,
+        );
     const bestRoute = routes[0];
 
     if (!bestRoute) {
@@ -729,8 +902,14 @@ export class AgentOrchestrator {
 
     // Build route info string
     let routeInfo = "";
+    if (fundingPlan.note) {
+      routeInfo += fundingPlan.note;
+    }
     if (bestRoute.path.length > 1) {
-      routeInfo = `🛤️ **Route:** ${bestRoute.path.map((h) => `${h.from}→${h.to}`).join(" → ")}`;
+      if (routeInfo) {
+        routeInfo += "\n";
+      }
+      routeInfo += `🛤️ **Route:** ${bestRoute.path.map((h) => `${h.from}→${h.to}`).join(" → ")}`;
     }
 
     // Add fee comparison summary
@@ -762,12 +941,17 @@ export class AgentOrchestrator {
       monthly: { en: "Monthly", es: "Mensual", pt: "Mensal", fr: "Mensuel" },
     };
 
+    const previewRate =
+      parseFloat(intent.amount || "0") > 0
+        ? bestRoute.estimatedOutput / parseFloat(intent.amount || "0")
+        : bestRoute.path[0].rate;
+
     const preview = responses["transfer_preview"]
       .replace(/{amount}/g, intent.amount)
       .replace(/{sourceCurrency}/g, sourceCurrency)
       .replace(/{recipientName}/g, intent.recipientName || "Recipient")
       .replace(/{recipientCountry}/g, countryName)
-      .replace(/{rate}/g, bestRoute.path[0].rate.toString())
+      .replace(/{rate}/g, previewRate.toString())
       .replace(/{targetCurrency}/g, targetCurrency)
       .replace(/{receiveAmount}/g, bestRoute.estimatedOutput.toLocaleString())
       .replace(/{fee}/g, bestRoute.totalFeeUSD.toFixed(2))
@@ -779,7 +963,14 @@ export class AgentOrchestrator {
       .replace(/{routeInfo}/g, routeInfo);
 
     // Store pending confirmation
-    this.pendingConfirmation = { intent, route: bestRoute, comparison };
+    this.pendingConfirmation = {
+      intent,
+      route: bestRoute,
+      comparison,
+      executionSourceCurrency: fundingPlan.executionSourceCurrency,
+      executionSourceAmount: fundingPlan.executionSourceAmount,
+      executionSourceNote: fundingPlan.note,
+    };
 
     const suggestedActions =
       lang === "es"
@@ -1028,26 +1219,16 @@ export class AgentOrchestrator {
         ? sourceCurrency
         : intent.targetCurrency ||
           this.getTargetCurrency(intent.recipientCountry || "");
+      const executionSourceCurrency =
+        pending.executionSourceCurrency || sourceCurrency;
+      const executionSourceAmount =
+        pending.executionSourceAmount || intent.amount || "0";
 
       // Map real-world currency to Celo Blockchain Token names
-      const tokenMap: { [key: string]: string } = {
-        USD: "cUSD", // Map USD to Celo Dollar
-        EUR: "cEUR", // Map EUR to Celo Euro
-        BRL: "BRLm", // Map BRL to Mento Real
-        COP: "COPm", // Map COP to Mento Peso
-        XOF: "XOFm", // Map XOF to Mento CFA
-        GHS: "GHSm", // Map GHS to Mento Ghana Cedi
-        KES: "KESm", // Map KES to Mento Kenyan Shilling
-        NGN: "NGNm", // Map NGN to Mento Naira
-        PHP: "PHPm", // Map PHP to Mento Philippine Peso
-        GBP: "GBPm", // Map GBP to Mento Pound
-        INR: "INRm", // Map INR to Mento Rupee
-        MXN: "MXNm", // Map MXN to Mento Peso
-      };
-      const blockchainToken = tokenMap[sourceCurrency] || sourceCurrency;
-      const targetToken = tokenMap[targetCurrency] || targetCurrency;
+      const blockchainToken = this.mapToBlockchainToken(executionSourceCurrency);
+      const targetToken = this.mapToBlockchainToken(targetCurrency);
 
-      let transferAmount = intent.amount || "0";
+      let transferAmount = executionSourceAmount;
       let transferCurrency = blockchainToken;
 
       // If both currencies exist on-chain, swap via Mento before transfer

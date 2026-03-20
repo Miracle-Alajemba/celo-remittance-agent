@@ -162,7 +162,9 @@ async function buildOnChainRoutes(tokenIn, tokenOut, amount) {
 }
 function buildFxRoutes(sourceCurrency, targetCurrency, amount) {
     const routes = [];
-    const forexRate = (0, rates_1.getRate)(sourceCurrency, targetCurrency);
+    const sourceFiat = toFiatSymbol(sourceCurrency);
+    const targetFiat = toFiatSymbol(targetCurrency);
+    const forexRate = (0, rates_1.getRate)(sourceFiat, targetFiat);
     if (forexRate) {
         const celoFee = 0.30;
         const fee = amount * (celoFee / 100);

@@ -54,7 +54,11 @@ export async function connectDB(): Promise<void> {
       return;
     }
 
-    await mongoose.connect(MONGODB_URI);
+    const timeoutMs = Number(process.env.MONGODB_CONNECT_TIMEOUT_MS || 5000);
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: timeoutMs,
+      connectTimeoutMS: timeoutMs,
+    });
     console.log('✅ MongoDB connected');
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);

@@ -30,6 +30,21 @@ export class TelegramBotHandler {
   private readonly telegramAgent: https.Agent;
   private started = false;
 
+  private readonly callbackActionMap: Record<string, string> = {
+    transfer_confirm: 'yes, send it',
+    transfer_cancel: 'cancel',
+    transfer_compare: 'view full comparison',
+    swap_execute: 'execute swap',
+    swap_cancel: 'cancel',
+    check_balance: 'check my balance',
+    view_history: 'show my transaction history',
+    my_wallet: 'wallet',
+    send_money: 'send money',
+    send_again: 'send again',
+    try_another_swap: 'try another swap',
+    compare_fees: 'compare fees',
+  };
+
   constructor() {
     if (!TELEGRAM_BOT_TOKEN) {
       throw new Error('❌ TELEGRAM_BOT_TOKEN is missing in .env file.');
@@ -150,13 +165,15 @@ export class TelegramBotHandler {
         const agent = this.getOrCreateAgent(userId);
 
         if (!actionData) return;
+        const mappedAction = this.callbackActionMap[actionData] || actionData;
+        await ctx.editMessageReplyMarkup(undefined).catch(() => {});
         await ctx.sendChatAction('typing');
 
         // Feed the button click back into the AI as if the user typed it
-        const response = await agent.processMessage(actionData);
+        const response = await agent.processMessage(mappedAction);
 
         await this.sendResponse(ctx, response);
-        console.log(`[Telegram] ${user.firstName} clicked: ${actionData}`);
+        console.log(`[Telegram] ${user.firstName} clicked: ${actionData} -> ${mappedAction}`);
     }));
 
     // Error handling
@@ -184,7 +201,7 @@ export class TelegramBotHandler {
       if (response.suggestedActions && response.suggestedActions.length > 0) {
           // Create a grid of buttons (2 per row)
           const buttons = response.suggestedActions.map(action =>
-              Markup.button.callback(action, action)
+              Markup.button.callback(action, this.getCallbackData(action))
           );
 
           extra.reply_markup = {
@@ -241,6 +258,31 @@ export class TelegramBotHandler {
           tempArray.push(myChunk);
       }
       return tempArray;
+  }
+
+  private getCallbackData(action: string): string {
+    const normalized = action.trim().toLowerCase();
+    const entries: Array<[RegExp, string]> = [
+      [/yes.*send|sí.*enviar|sim.*enviar|oui.*envoyer/, 'transfer_confirm'],
+      [/cancel|cancelar|annuler/, 'transfer_cancel'],
+      [/view full comparison|ver comparación completa|ver comparação completa|voir comparaison complète/, 'transfer_compare'],
+      [/execute swap/, 'swap_execute'],
+      [/check balance/, 'check_balance'],
+      [/view history/, 'view_history'],
+      [/my wallet/, 'my_wallet'],
+      [/send money/, 'send_money'],
+      [/send again/, 'send_again'],
+      [/try another swap/, 'try_another_swap'],
+      [/compare fees/, 'compare_fees'],
+    ];
+
+    for (const [pattern, callbackData] of entries) {
+      if (pattern.test(normalized)) {
+        return callbackData;
+      }
+    }
+
+    return normalized.replace(/[^a-z0-9]+/g, '_').slice(0, 60) || 'action';
   }
 
   /**

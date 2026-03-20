@@ -82,7 +82,11 @@ async function connectDB() {
             console.warn('⚠️ MongoDB is not configured because MONGODB_URI is missing. The app will run in demo mode without persistence.');
             return;
         }
-        await mongoose_1.default.connect(MONGODB_URI);
+        const timeoutMs = Number(process.env.MONGODB_CONNECT_TIMEOUT_MS || 5000);
+        await mongoose_1.default.connect(MONGODB_URI, {
+            serverSelectionTimeoutMS: timeoutMs,
+            connectTimeoutMS: timeoutMs,
+        });
         console.log('✅ MongoDB connected');
     }
     catch (error) {
