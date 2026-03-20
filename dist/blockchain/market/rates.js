@@ -100,13 +100,43 @@ async function fetchRatesForBase(base) {
 function getRate(base, quote) {
     if (base === quote)
         return 1;
-    const pair = `${base}-${quote}`;
-    const direct = cache.get(pair);
-    if (typeof direct === 'number')
+    const directLookup = (from, to) => {
+        const pair = `${from}-${to}`;
+        const direct = cache.get(pair);
+        if (typeof direct === 'number')
+            return direct;
+        const reverse = cache.get(`${to}-${from}`);
+        if (typeof reverse === 'number' && reverse > 0) {
+            return 1 / reverse;
+        }
+        return null;
+    };
+    const direct = directLookup(base, quote);
+    if (direct)
         return direct;
-    const reverse = cache.get(`${quote}-${base}`);
-    if (typeof reverse === 'number' && reverse > 0) {
-        return 1 / reverse;
+    // Fall back to a simple one-hop cross rate for corridors we don't store directly,
+    // e.g. EUR -> GHS via USD.
+    const currencies = new Set();
+    for (const pair of cache.keys()) {
+        const [from, to] = pair.split('-');
+        if (from)
+            currencies.add(from);
+        if (to)
+            currencies.add(to);
+    }
+    const pivotPriority = ['USD', 'EUR', 'GBP'];
+    const pivots = [
+        ...pivotPriority,
+        ...Array.from(currencies.values()).filter((c) => !pivotPriority.includes(c)),
+    ];
+    for (const pivot of pivots) {
+        if (pivot === base || pivot === quote)
+            continue;
+        const baseToPivot = directLookup(base, pivot);
+        const pivotToQuote = directLookup(pivot, quote);
+        if (baseToPivot && pivotToQuote) {
+            return baseToPivot * pivotToQuote;
+        }
     }
     return null;
 }

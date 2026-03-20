@@ -186,6 +186,7 @@ class AgentOrchestrator {
         this.pendingWalletRequestSource = "onboarding";
         this.pendingSendIntent = null;
         this.pendingConfirmation = null;
+        this.pendingSwapConfirmation = null;
         this.isFirstInteraction = true;
         this.memory = new memory_1.ConversationMemory(userId);
         this.userId = userId;
@@ -208,6 +209,24 @@ class AgentOrchestrator {
         const existingProfile = await (0, user_profile_1.getUser)(this.userId);
         const preferredLang = existingProfile?.language ||
             this.memory.getUserProfile().preferredLanguage;
+        if (/^swap\s*&\s*send$/i.test(userMessage.trim())) {
+            const lang = preferredLang === "es" ||
+                preferredLang === "pt" ||
+                preferredLang === "fr"
+                ? preferredLang
+                : "en";
+            const message = lang === "es"
+                ? "🔁 La vista previa del swap ya está lista. La ejecución del swap aún se realiza fuera de Telegram, así que usa la interfaz web Swap & Send o prueba otro swap aquí."
+                : lang === "pt"
+                    ? "🔁 A prévia do swap já está pronta. A execução do swap ainda acontece fora do Telegram, então use a interface web Swap & Send ou teste outra cotação aqui."
+                    : lang === "fr"
+                        ? "🔁 L’aperçu du swap est prêt. L’exécution du swap se fait encore hors de Telegram, utilisez donc l’interface web Swap & Send ou essayez un autre swap ici."
+                        : "🔁 Your swap preview is ready. Swap execution still happens outside Telegram for now, so use the web Swap & Send flow or try another swap quote here.";
+            return this.createResponse(message, "text", lang, [
+                "Check balance",
+                "Try another swap",
+            ]);
+        }
         // ===== LOAD WALLET FROM DATABASE IF SAVED ===== (FIX: reload wallet on each message)
         const savedWalletAddress = this.getUserWalletAddress(existingProfile?.walletAddress);
         if (savedWalletAddress) {
@@ -295,6 +314,9 @@ class AgentOrchestrator {
         // Check for confirmation of pending transfer
         if (this.pendingConfirmation) {
             return await this.handleConfirmation(userMessage);
+        }
+        if (this.pendingSwapConfirmation) {
+            return await this.handleSwapConfirmation(userMessage);
         }
         const orphanConfirmWords = [
             "yes",
@@ -527,6 +549,9 @@ class AgentOrchestrator {
     async handleSwapIntent(intent) {
         const lang = intent.detectedLanguage;
         const responses = RESPONSES[lang] || RESPONSES["en"];
+        // A swap preview should not inherit any stale send/confirmation state.
+        this.pendingSendIntent = null;
+        this.pendingConfirmation = null;
         if (!intent.amount) {
             return this.createResponse(responses["swap_need_amount"], "text", lang);
         }
@@ -539,6 +564,7 @@ class AgentOrchestrator {
         }
         try {
             const quote = await (0, mento_integration_1.getSwapQuote)(intent.sourceCurrency, intent.targetCurrency, intent.amount);
+            this.pendingSwapConfirmation = { intent, quote };
             const preview = responses["swap_preview"]
                 .replace(/{inputAmount}/g, quote.inputAmount)
                 .replace(/{inputCurrency}/g, quote.inputCurrency)
@@ -549,13 +575,62 @@ class AgentOrchestrator {
                 .replace(/{feePercent}/g, quote.feePercent.toFixed(2))
                 .replace(/{route}/g, quote.route || "Mento");
             return this.createResponse(preview, "swap_preview", lang, [
-                "Swap & Send",
+                "✅ Execute swap",
+                "❌ Cancel",
                 "Check balance",
             ]);
         }
         catch (error) {
             return this.createResponse(`❌ Swap quote failed: ${error.message}`, "error", lang);
         }
+    }
+    async handleSwapConfirmation(message) {
+        const pending = this.pendingSwapConfirmation;
+        const lang = pending.intent.detectedLanguage;
+        const lower = message.toLowerCase().trim();
+        const isCancel = lower.includes("cancel") ||
+            lower.includes("annuler") ||
+            lower.includes("cancelar") ||
+            lower === "no";
+        if (isCancel) {
+            this.pendingSwapConfirmation = null;
+            return this.createResponse("❌ Swap cancelled.", "text", lang, [
+                "Try another swap",
+                "Check balance",
+            ]);
+        }
+        const isConfirmed = lower.includes("execute swap") ||
+            lower.includes("yes") ||
+            lower.includes("confirm") ||
+            lower.includes("swap now") ||
+            lower === "✅ execute swap";
+        if (!isConfirmed) {
+            return this.createResponse("Would you like to execute this swap? (yes/cancel)", "text", lang, ["✅ Execute swap", "❌ Cancel", "Check balance"]);
+        }
+        const intent = pending.intent;
+        const quote = pending.quote;
+        this.pendingSwapConfirmation = null;
+        const swapResult = await (0, mento_integration_1.executeSwap)(intent.sourceCurrency || quote.inputCurrency, intent.targetCurrency || quote.outputCurrency, intent.amount || quote.inputAmount, Number(process.env.MENTO_MAX_SLIPPAGE || 0.01));
+        if (!swapResult.success) {
+            return this.createResponse(`❌ Swap failed: ${swapResult.error || "Unknown error"}`, "error", lang, ["Try another swap", "Check balance"]);
+        }
+        const successMsg = [
+            "✅ Swap Successful!",
+            "",
+            `💵 Swapped: ${swapResult.inputAmount} ${quote.inputCurrency}`,
+            `📥 Received: ${swapResult.outputAmount} ${quote.outputCurrency}`,
+            `💱 Route: ${quote.route}`,
+            `🔗 Tx Hash: ${swapResult.txHash || "N/A"}`,
+            swapResult.blockNumber
+                ? `🧱 Block: ${swapResult.blockNumber}`
+                : undefined,
+        ]
+            .filter(Boolean)
+            .join("\n");
+        return this.createResponse(successMsg, "receipt", lang, [
+            "Check balance",
+            "Try another swap",
+        ]);
     }
     async handleConfirmation(message) {
         const lower = message.toLowerCase();
@@ -641,6 +716,13 @@ class AgentOrchestrator {
                 BRL: "BRLm", // Map BRL to Mento Real
                 COP: "COPm", // Map COP to Mento Peso
                 XOF: "XOFm", // Map XOF to Mento CFA
+                GHS: "GHSm", // Map GHS to Mento Ghana Cedi
+                KES: "KESm", // Map KES to Mento Kenyan Shilling
+                NGN: "NGNm", // Map NGN to Mento Naira
+                PHP: "PHPm", // Map PHP to Mento Philippine Peso
+                GBP: "GBPm", // Map GBP to Mento Pound
+                INR: "INRm", // Map INR to Mento Rupee
+                MXN: "MXNm", // Map MXN to Mento Peso
             };
             const blockchainToken = tokenMap[sourceCurrency] || sourceCurrency;
             const targetToken = tokenMap[targetCurrency] || targetCurrency;

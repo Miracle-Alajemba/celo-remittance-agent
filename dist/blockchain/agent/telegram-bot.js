@@ -38,12 +38,16 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TelegramBotHandler = void 0;
 exports.getTelegramBot = getTelegramBot;
 exports.startTelegramBot = startTelegramBot;
 const telegraf_1 = require("telegraf");
 const dotenv = __importStar(require("dotenv"));
+const https_1 = __importDefault(require("https"));
 const orchestrator_1 = require("./orchestrator");
 dotenv.config();
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -55,7 +59,14 @@ class TelegramBotHandler {
             throw new Error('❌ TELEGRAM_BOT_TOKEN is missing in .env file.');
         }
         console.log('[Telegram] Initializing Bot...');
-        this.bot = new telegraf_1.Telegraf(TELEGRAM_BOT_TOKEN);
+        // Force IPv4 for Telegram API calls. In this environment, Node HTTPS
+        // requests to api.telegram.org can time out on default resolution.
+        this.telegramAgent = new https_1.default.Agent({ family: 4 });
+        this.bot = new telegraf_1.Telegraf(TELEGRAM_BOT_TOKEN, {
+            telegram: {
+                agent: this.telegramAgent,
+            },
+        });
         this.setupHandlers();
     }
     /**
@@ -236,9 +247,11 @@ class TelegramBotHandler {
             // Graceful shutdown
             process.once('SIGINT', () => this.bot.stop('SIGINT'));
             process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
+            return true;
         }
         catch (error) {
             console.error('[Telegram] Failed to start bot:', error);
+            throw error;
         }
     }
 }

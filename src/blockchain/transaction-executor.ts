@@ -36,6 +36,13 @@ const SYMBOL_ALIASES: { [symbol: string]: string } = {
   BRL: 'BRLm',
   COP: 'COPm',
   XOF: 'XOFm',
+  GHS: 'GHSm',
+  KES: 'KESm',
+  NGN: 'NGNm',
+  PHP: 'PHPm',
+  GBP: 'GBPm',
+  INR: 'INRm',
+  MXN: 'MXNm',
 };
 
 async function resolveTokenAddress(symbol: string): Promise<string | null> {
@@ -59,6 +66,21 @@ const ERC20_ABI = [
   'function approve(address spender, uint256 amount) public returns (bool)',
   'function allowance(address owner, address spender) public view returns (uint256)',
 ];
+
+async function retry<T>(fn: () => Promise<T>, attempts: number = 3, delayMs: number = 500): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
 
 /**
  * Execute a real blockchain transfer with comprehensive error handling
@@ -295,9 +317,14 @@ export async function getAllWalletBalances(walletAddress?: string): Promise<{ [c
 
   // Native CELO balance
   try {
-    const celoBalance = await celoProvider.provider.getBalance(targetAddress);
+    const celoBalance = await retry(
+      () => celoProvider.provider.getBalance(targetAddress),
+      3,
+      750,
+    );
     balances['CELO'] = ethers.formatEther(celoBalance);
   } catch (error) {
+    console.warn('[Balances] Failed to fetch CELO balance after retries:', error);
     balances['CELO'] = '0';
   }
 

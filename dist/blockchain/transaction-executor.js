@@ -54,6 +54,13 @@ const SYMBOL_ALIASES = {
     BRL: 'BRLm',
     COP: 'COPm',
     XOF: 'XOFm',
+    GHS: 'GHSm',
+    KES: 'KESm',
+    NGN: 'NGNm',
+    PHP: 'PHPm',
+    GBP: 'GBPm',
+    INR: 'INRm',
+    MXN: 'MXNm',
 };
 async function resolveTokenAddress(symbol) {
     const normalized = SYMBOL_ALIASES[symbol] || symbol;
@@ -75,6 +82,21 @@ const ERC20_ABI = [
     'function approve(address spender, uint256 amount) public returns (bool)',
     'function allowance(address owner, address spender) public view returns (uint256)',
 ];
+async function retry(fn, attempts = 3, delayMs = 500) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+            return await fn();
+        }
+        catch (error) {
+            lastError = error;
+            if (attempt < attempts) {
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+        }
+    }
+    throw lastError;
+}
 /**
  * Execute a real blockchain transfer with comprehensive error handling
  */
@@ -269,10 +291,11 @@ async function getAllWalletBalances(walletAddress) {
     const targetAddress = walletAddress || await celo_provider_1.celoProvider.getWalletAddress();
     // Native CELO balance
     try {
-        const celoBalance = await celo_provider_1.celoProvider.provider.getBalance(targetAddress);
+        const celoBalance = await retry(() => celo_provider_1.celoProvider.provider.getBalance(targetAddress), 3, 750);
         balances['CELO'] = ethers_1.ethers.formatEther(celoBalance);
     }
     catch (error) {
+        console.warn('[Balances] Failed to fetch CELO balance after retries:', error);
         balances['CELO'] = '0';
     }
     for (const [currency] of Object.entries(STABLECOIN_ADDRESSES)) {
