@@ -36,7 +36,10 @@ import { getAgentWallet } from "./blockchain/agent/erc8004-wallet";
 import { getX402Protocol } from "./blockchain/agent/x402-payment";
 import { getSkillsFramework } from "./blockchain/agent/celo-skills";
 import { getAgentScanner } from "./blockchain/agent/agentscan";
-import { startTelegramBot } from "./blockchain/agent/telegram-bot";
+import {
+  getTelegramBot,
+  startTelegramBot,
+} from "./blockchain/agent/telegram-bot";
 import { getWhatsAppBot } from "./blockchain/agent/whatsapp-bot";
 import { connectDB, isDbConnected } from "./database/connection";
 import {
@@ -52,6 +55,18 @@ import { resetTransactionHistory } from "./blockchain/agent/transaction-history"
 import { resetScheduledTransfers } from "./blockchain/agent/scheduler";
 import { resetUserProfiles } from "./blockchain/agent/user-profile";
 import { OpenClawAdapter } from "./blockchain/agent/openclaw-adapter";
+import {
+  getCeloChainId,
+  getCeloNetworkLabel,
+  getCeloNetworkMode,
+  getCeloRpcUrl,
+  getStablecoinAddresses,
+} from "./blockchain/celo/network-config";
+import { celoProvider } from "./blockchain/celo/celo-provider";
+import {
+  approveWalletApprovalSession,
+  getWalletApprovalSession,
+} from "./blockchain/agent/wallet-approval-session";
 
 dotenv.config();
 validateCoreConfig();
@@ -102,6 +117,10 @@ function getAgentOrRespond(res: express.Response): AgentOrchestrator | null {
  */
 app.get("/dashboard", (_req: express.Request, res: express.Response) => {
   res.sendFile(path.join(__dirname, "../public/dashboard.html"));
+});
+
+app.get("/connect", (_req: express.Request, res: express.Response) => {
+  res.sendFile(path.join(__dirname, "../public/sign-transfer.html"));
 });
 
 // ==================== Chat API ====================
@@ -479,6 +498,105 @@ app.get("/api/health", (_req: express.Request, res: express.Response) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+app.get(
+  "/api/wallet-signer/config",
+  (_req: express.Request, res: express.Response) => {
+    const mode = getCeloNetworkMode();
+    const chainId = getCeloChainId();
+    const explorerBaseUrl =
+      mode === "mainnet"
+        ? "https://celo.blockscout.com"
+        : "https://celo-sepolia.blockscout.com";
+
+    return res.json({
+      network: {
+        mode,
+        label: getCeloNetworkLabel(),
+        chainId,
+        chainIdHex: `0x${chainId.toString(16)}`,
+        rpcUrl: getCeloRpcUrl(),
+        explorerBaseUrl,
+      },
+      backendSignerAvailable: Boolean(celoProvider.wallet),
+      telegramBotUrl: getTelegramBot().getTelegramBotUrl(),
+      stablecoinAddresses: getStablecoinAddresses(),
+      currencyAliases: {
+        USD: "cUSD",
+        EUR: "cEUR",
+        BRL: "BRLm",
+        COP: "COPm",
+        XOF: "XOFm",
+        GHS: "GHSm",
+        KES: "KESm",
+        NGN: "NGNm",
+        PHP: "PHPm",
+        GBP: "GBPm",
+        INR: "INRm",
+        MXN: "MXNm",
+        CELO: "CELO",
+      },
+    });
+  },
+);
+
+app.get(
+  "/api/wallet-approval/session/:sessionId",
+  (req: express.Request, res: express.Response) => {
+    try {
+      const session = getWalletApprovalSession(req.params.sessionId);
+      if (!session) {
+        return res
+          .status(404)
+          .json({ error: "Wallet approval session not found." });
+      }
+      return res.json({
+        ...session,
+        backendSignerAvailable: Boolean(celoProvider.wallet),
+        telegramBotUrl: getTelegramBot().getTelegramBotUrl(),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  },
+);
+
+app.post(
+  "/api/wallet-approval/session/:sessionId/approve",
+  async (req: express.Request, res: express.Response) => {
+    try {
+      const { walletAddress, signature } = req.body;
+      if (!walletAddress || !signature) {
+        return res
+          .status(400)
+          .json({ error: "walletAddress and signature are required" });
+      }
+
+      const session = approveWalletApprovalSession({
+        sessionId: req.params.sessionId,
+        walletAddress,
+        signature,
+      });
+
+      const telegramBot = getTelegramBot();
+      const response = await telegramBot.handleWalletApproval(
+        session.id,
+        session.approvedWalletAddress || walletAddress,
+      );
+
+      return res.json({
+        success: response.type !== "error",
+        sessionId: session.id,
+        status: response.type === "error" ? "failed" : "completed",
+        walletAddress: session.approvedWalletAddress || walletAddress,
+        botResponse: response.message,
+        txHash: response.data?.blockchain?.txHash,
+      });
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  },
+);
 
 // ==================== Demo API ====================
 

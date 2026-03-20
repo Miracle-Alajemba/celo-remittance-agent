@@ -1,85 +1,177 @@
-/**
- * Database Connection and Initialization
- */
+import mongoose from "mongoose";
 
-import mongoose from 'mongoose';
-import * as dotenv from 'dotenv';
+const CONNECT_TIMEOUT_MS = 10_000;
+const BASE_RETRY_MS = 5_000;
+const MAX_RETRY_MS = 60_000;
 
-dotenv.config();
+let reconnectTimer: NodeJS.Timeout | null = null;
+let reconnectInFlight = false;
+let reconnectAttempt = 0;
+let listenersInitialized = false;
+let lastMongoError: string | null = null;
+let lastMongoEventAt: string | null = null;
 
-const MONGODB_URI = process.env.MONGODB_URI || '';
-
-function hasExplicitDatabaseName(uri: string): boolean {
-  if (!uri) return false;
-  const withoutProtocol = uri.replace(/^mongodb(?:\+srv)?:\/\//, '');
-  const slashIndex = withoutProtocol.indexOf('/');
-  if (slashIndex < 0) return false;
-  const afterSlash = withoutProtocol.slice(slashIndex + 1);
-  if (!afterSlash || afterSlash.startsWith('?')) return false;
-  const dbName = afterSlash.split('?')[0];
-  return Boolean(dbName && dbName.trim());
+function setMongoEvent(message?: string | null): void {
+  lastMongoEventAt = new Date().toISOString();
+  lastMongoError = message ?? null;
 }
 
-function explainMongoIssue(error: unknown): string[] {
-  const message = error instanceof Error ? error.message : String(error);
-  const hints: string[] = [];
-
-  if (!hasExplicitDatabaseName(MONGODB_URI)) {
-    hints.push(
-      'Your MONGODB_URI does not include an explicit database name. Consider using a URI like "...mongodb.net/celo_remittance_agent?appName=CeloRemit".',
-    );
-  }
-
-  if (/whitelist|ReplicaSetNoPrimary|ServerSelection|ECONNREFUSED|querySrv/i.test(message)) {
-    hints.push(
-      'This looks like an Atlas connectivity issue. Check that your current IP is allowed in MongoDB Atlas Network Access and that the cluster is running.',
-    );
-  }
-
-  if (/bad auth|authentication failed/i.test(message)) {
-    hints.push('MongoDB credentials may be incorrect. Re-check the username and password in MONGODB_URI.');
-  }
-
-  if (hints.length === 0) {
-    hints.push('Verify MONGODB_URI, cluster status, and network access. The app will keep running without MongoDB.');
-  }
-
-  return hints;
+function getMongoUri(): string | undefined {
+  return process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGO_URL;
 }
 
-export async function connectDB(): Promise<void> {
+function clearReconnectTimer(): void {
+  if (!reconnectTimer) return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
+
+function nextRetryDelay(): number {
+  const delay = Math.min(BASE_RETRY_MS * 2 ** Math.max(0, reconnectAttempt - 1), MAX_RETRY_MS);
+  return delay;
+}
+
+function initMongoListeners(): void {
+  if (listenersInitialized) return;
+  listenersInitialized = true;
+
+  mongoose.connection.on("connected", () => {
+    reconnectAttempt = 0;
+    reconnectInFlight = false;
+    clearReconnectTimer();
+    setMongoEvent(null);
+    console.log("✅ MongoDB connected");
+  });
+
+  mongoose.connection.on("reconnected", () => {
+    reconnectAttempt = 0;
+    reconnectInFlight = false;
+    clearReconnectTimer();
+    setMongoEvent(null);
+    console.log("🔄 MongoDB reconnected");
+  });
+
+  mongoose.connection.on("disconnected", () => {
+    reconnectInFlight = false;
+    setMongoEvent("MongoDB disconnected");
+    console.warn("⚠️ MongoDB disconnected. Retrying in background...");
+    scheduleReconnect();
+  });
+
+  mongoose.connection.on("error", (error) => {
+    reconnectInFlight = false;
+    const message = error instanceof Error ? error.message : String(error);
+    setMongoEvent(message);
+    console.error("❌ MongoDB connection error:", message);
+    scheduleReconnect();
+  });
+}
+
+async function attemptMongoConnect(origin: string): Promise<boolean> {
+  const mongoUri = getMongoUri();
+  if (!mongoUri) {
+    setMongoEvent("Missing MONGODB_URI");
+    console.warn("⚠️ MONGODB_URI is not set. Running in in-memory mode.");
+    return false;
+  }
+
+  if (mongoose.connection.readyState === 1) {
+    reconnectAttempt = 0;
+    clearReconnectTimer();
+    return true;
+  }
+
+  if (reconnectInFlight || mongoose.connection.readyState === 2) {
+    return false;
+  }
+
+  reconnectInFlight = true;
+  reconnectAttempt += 1;
+
+  const label =
+    origin === "startup" ? "initial connection" : `${origin} reconnect attempt ${reconnectAttempt}`;
+  console.log(`🔌 MongoDB ${label}...`);
+
   try {
-    if (!MONGODB_URI) {
-      console.warn('⚠️ MongoDB is not configured because MONGODB_URI is missing. The app will run in demo mode without persistence.');
-      return;
-    }
-
-    const timeoutMs = Number(process.env.MONGODB_CONNECT_TIMEOUT_MS || 5000);
-    await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: timeoutMs,
-      connectTimeoutMS: timeoutMs,
+    await mongoose.connect(mongoUri, {
+      serverSelectionTimeoutMS: CONNECT_TIMEOUT_MS,
+      connectTimeoutMS: CONNECT_TIMEOUT_MS,
+      socketTimeoutMS: CONNECT_TIMEOUT_MS,
+      family: 4,
+      dbName: mongoose.connection.name || undefined,
     });
-    console.log('✅ MongoDB connected');
+
+    reconnectInFlight = false;
+    reconnectAttempt = 0;
+    clearReconnectTimer();
+    setMongoEvent(null);
+    return true;
   } catch (error) {
-    console.error('❌ MongoDB connection failed:', error);
-    for (const hint of explainMongoIssue(error)) {
-      console.warn(`⚠️ ${hint}`);
-    }
-    console.warn('⚠️ Continuing without MongoDB. Persistent history and schedules will fall back to demo memory mode.');
+    reconnectInFlight = false;
+    const message = error instanceof Error ? error.message : String(error);
+    setMongoEvent(message);
+    console.error(`❌ MongoDB ${label} failed:`, message);
+    scheduleReconnect();
+    return false;
   }
+}
+
+function scheduleReconnect(): void {
+  if (reconnectTimer || reconnectInFlight || mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) {
+    return;
+  }
+
+  const delay = nextRetryDelay();
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    await attemptMongoConnect("background");
+  }, delay);
+
+  console.log(`⏳ Next MongoDB reconnect attempt in ${Math.round(delay / 1000)}s`);
+}
+
+export async function connectDB(): Promise<boolean> {
+  initMongoListeners();
+  const connected = await attemptMongoConnect("startup");
+
+  if (!connected) {
+    console.warn("⚠️ MongoDB unavailable. The app will keep retrying and use in-memory fallbacks until the database returns.");
+  }
+
+  return connected;
 }
 
 export async function disconnectDB(): Promise<void> {
-  try {
+  clearReconnectTimer();
+  reconnectInFlight = false;
+  reconnectAttempt = 0;
+  if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
-    console.log('✅ MongoDB disconnected');
-  } catch (error) {
-    console.error('❌ MongoDB disconnection failed:', error);
   }
 }
 
-export default mongoose;
-
 export function isDbConnected(): boolean {
   return mongoose.connection.readyState === 1;
+}
+
+export function getDbStatus(): {
+  connected: boolean;
+  readyState: number;
+  host?: string;
+  name?: string;
+  lastError: string | null;
+  lastEventAt: string | null;
+  reconnectAttempt: number;
+  reconnectScheduled: boolean;
+} {
+  return {
+    connected: isDbConnected(),
+    readyState: mongoose.connection.readyState,
+    host: mongoose.connection.host,
+    name: mongoose.connection.name,
+    lastError: lastMongoError,
+    lastEventAt: lastMongoEventAt,
+    reconnectAttempt,
+    reconnectScheduled: Boolean(reconnectTimer),
+  };
 }

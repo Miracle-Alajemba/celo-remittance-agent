@@ -15,8 +15,10 @@ export function isEnvSet(name: string): boolean {
 }
 
 export function validateCoreConfig(): void {
-  requireEnv('PRIVATE_KEY');
   if (!process.env.CELO_RPC_URL && !process.env.ALFAJORES_RPC) {
     throw new Error('Missing required env var: CELO_RPC_URL (or legacy ALFAJORES_RPC)');
+  }
+  if (!process.env.PRIVATE_KEY) {
+    console.warn('⚠️ PRIVATE_KEY is not set. Backend signing will be unavailable until a valid signer is configured.');
   }
 }

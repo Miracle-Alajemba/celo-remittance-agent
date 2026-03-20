@@ -102,6 +102,13 @@ async function retry(fn, attempts = 3, delayMs = 500) {
  */
 async function executeBlockchainTransfer(request) {
     try {
+        if (!celo_provider_1.celoProvider.wallet) {
+            return {
+                success: false,
+                error: 'Backend signer unavailable. Restore a valid PRIVATE_KEY or complete execution through a connected wallet flow.',
+                status: 'failed',
+            };
+        }
         // Validate inputs
         if (!ethers_1.ethers.isAddress(request.recipient)) {
             return {

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Connect your wallet and sign a Celo transfer directly.">
+  <title>CeloRemit Sign Transfer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="sign-transfer.css">
+</head>
+<body>
+  <main class="signer-shell">
+    <section class="signer-card">
+      <div class="eyebrow">Non-custodial signer</div>
+      <h1>Sign A Transfer With Your Wallet</h1>
+      <p class="lead">
+        Connect a wallet and approve a remittance request from Telegram, or use this page manually for a direct transfer.
+      </p>
+
+      <div class="network-banner" id="networkBanner">Loading Celo network config...</div>
+
+      <div class="actions-row">
+        <button id="connectWalletBtn" class="primary-btn" type="button">Connect wallet</button>
+        <a class="secondary-btn" href="/">Back to app</a>
+      </div>
+
+      <div class="wallet-status" id="walletStatus">No wallet connected yet.</div>
+
+      <div class="result-card" id="sessionCard" hidden>
+        <h2>Wallet approval session</h2>
+        <div id="sessionOutput"></div>
+      </div>
+
+      <div class="balances-card">
+        <h2>Detected Balances</h2>
+        <pre id="balancesOutput">Connect a wallet to load balances.</pre>
+      </div>
+
+      <form id="signTransferForm" class="transfer-form">
+        <div class="form-grid">
+          <label>
+            <span>Recipient address</span>
+            <input id="recipientInput" name="recipient" type="text" placeholder="0x..." required>
+          </label>
+
+          <label>
+            <span>Amount</span>
+            <input id="amountInput" name="amount" type="number" step="0.000001" min="0" placeholder="0.1" required>
+          </label>
+
+          <label>
+            <span>Currency</span>
+            <select id="currencySelect" name="currency">
+              <option value="CELO">CELO</option>
+              <option value="cUSD">cUSD</option>
+              <option value="cEUR">cEUR</option>
+              <option value="USDm">USDm</option>
+              <option value="EURm">EURm</option>
+              <option value="BRLm">BRLm</option>
+              <option value="COPm">COPm</option>
+              <option value="XOFm">XOFm</option>
+              <option value="GHSm">GHSm</option>
+              <option value="KESm">KESm</option>
+              <option value="NGNm">NGNm</option>
+              <option value="PHPm">PHPm</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Recipient name</span>
+            <input id="recipientNameInput" name="recipientName" type="text" placeholder="Brother">
+          </label>
+
+          <label>
+            <span>Country</span>
+            <input id="countryInput" name="recipientCountry" type="text" placeholder="Kenya">
+          </label>
+        </div>
+
+        <div class="helper-text">
+          Tip: open this page with <code>?session=abc123</code> for Telegram wallet approval, or prefill a manual transfer with
+          <code>?recipient=0x...&amount=0.02&currency=cUSD&recipientName=Brother&recipientCountry=Kenya</code>
+        </div>
+
+        <button id="submitTransferBtn" class="primary-btn wide" type="submit">
+          Sign transfer with connected wallet
+        </button>
+      </form>
+
+      <div class="result-card" id="resultCard" hidden>
+        <h2>Transfer result</h2>
+        <div id="resultOutput"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+  <script src="sign-transfer.js"></script>
+</body>
+</html>

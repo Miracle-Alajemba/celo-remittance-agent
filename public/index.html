@@ -75,9 +75,12 @@
         <div class="wallet-info" id="walletInfo">
           <div class="wallet-status">
             <span class="status-dot"></span>
-            <span>Alfajores Testnet</span>
+            <span id="walletStatusText">Celo Mainnet</span>
           </div>
         </div>
+        <a class="wallet-signer-link" id="sidebarSignerLink" href="#wallet-signer">
+          Connect wallet
+        </a>
       </div>
     </aside>
 
@@ -322,6 +325,29 @@
         <div class="swap-balances" id="swapBalances">
           <p class="empty-state">Balances will appear here after refresh</p>
         </div>
+        <div class="swap-wallet-signer" id="swapWalletSigner">
+          <div class="swap-signer-card">
+            <div class="swap-signer-header">
+              <div>
+                <h3>Wallet Signer</h3>
+                <p>Use your own wallet for direct transfers from this polished UI.</p>
+              </div>
+              <button class="ghost-btn" id="swapWalletConnectBtn" type="button">Connect Wallet</button>
+            </div>
+            <div class="swap-signer-status" id="swapSignerStatus">
+              Connect an injected wallet like MetaMask on Celo Mainnet to sign directly.
+            </div>
+            <div class="swap-signer-note" id="swapSignerNote">
+              Wallet signing stays inside this app. Direct wallet signing currently works when the From and To assets are the same. For routed swaps, keep using the main Swap & Send flow below.
+            </div>
+            <div class="swap-signer-balances" id="swapSignerBalances">
+              <p class="empty-state">Wallet balances will appear here after connection.</p>
+            </div>
+            <div class="swap-signer-actions">
+              <button class="compare-btn" id="swapSignTransferBtn" type="button">Sign Direct Transfer</button>
+            </div>
+          </div>
+        </div>
         <div class="swap-results" id="swapResults">
           <p class="empty-state">Enter details and click Swap & Send to execute a testnet transfer</p>
         </div>
@@ -343,6 +369,7 @@
     </main>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

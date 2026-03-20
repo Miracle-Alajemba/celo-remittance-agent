@@ -77,6 +77,25 @@ export interface AgentResponse {
   language: string;
 }
 
+export interface PendingWalletApprovalContext {
+  language: string;
+  requestedTransfer: {
+    amount: string;
+    sourceCurrency: string;
+    recipientName: string;
+    recipientCountry: string;
+    recipientAddress: string;
+  };
+  executionPlan: {
+    executionSourceCurrency: string;
+    executionSourceAmount: string;
+    targetCurrency: string;
+    estimatedReceiveAmount: string;
+    routeSummary?: string;
+    requiresSwap: boolean;
+  };
+}
+
 // Multi-language response templates
 const RESPONSES: { [lang: string]: { [key: string]: string } } = {
   en: {
@@ -1959,6 +1978,107 @@ export class AgentOrchestrator {
   clearPendingTransferFlow(): void {
     this.pendingSendIntent = null;
     this.pendingConfirmation = null;
+  }
+
+  async linkSenderWalletAddress(address: string): Promise<void> {
+    await updateUserProfile(this.userId, { walletAddress: address });
+    this.walletAddress = address;
+    this.memory.setUserProfile({ walletAddress: address });
+  }
+
+  async executeApprovedPendingTransfer(
+    approvedWalletAddress: string,
+  ): Promise<AgentResponse> {
+    if (!this.pendingConfirmation) {
+      return this.createResponse(
+        '⚠️ I do not have a pending transfer to confirm. Start with something like: "Send $50 to the Philippines".',
+        "text",
+        "en",
+        ["Send money", "Compare fees"],
+      );
+    }
+
+    const lang = this.pendingConfirmation.intent.detectedLanguage || "en";
+    const expectedWallet =
+      this.getUserWalletAddress(this.memory.getUserProfile().walletAddress) ||
+      this.getUserWalletAddress(this.walletAddress);
+
+    if (!approvedWalletAddress || !this.extractAddress(approvedWalletAddress)) {
+      return this.createResponse(
+        "❌ Wallet approval failed because the signed wallet address is invalid.",
+        "error",
+        lang,
+      );
+    }
+
+    if (
+      expectedWallet &&
+      expectedWallet.toLowerCase() !== approvedWalletAddress.toLowerCase()
+    ) {
+      return this.createResponse(
+        `❌ Wallet approval came from ${approvedWalletAddress}, but this transfer is linked to ${expectedWallet}. Please approve with the same wallet you registered in the bot.`,
+        "error",
+        lang,
+        ["Check balance", "My wallet"],
+      );
+    }
+
+    if (!celoProvider.wallet) {
+      return this.createResponse(
+        "❌ Wallet approval was received, but backend execution is unavailable because PRIVATE_KEY is not configured. Restore a valid PRIVATE_KEY for agent-executed mode.",
+        "error",
+        lang,
+      );
+    }
+
+    await this.linkSenderWalletAddress(approvedWalletAddress);
+    return this.handleConfirmation("yes, send it");
+  }
+
+  getPendingWalletApprovalContext(): PendingWalletApprovalContext | null {
+    if (!this.pendingConfirmation) return null;
+
+    const pending = this.pendingConfirmation;
+    const intent = pending.intent;
+    const sourceCurrency = intent.sourceCurrency || "USD";
+    const targetCurrency =
+      intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry || "");
+    const executionSourceCurrency =
+      pending.executionSourceCurrency || sourceCurrency;
+    const executionSourceAmount =
+      pending.executionSourceAmount || intent.amount || "0";
+    const routeSummary = [
+      pending.executionSourceNote,
+      pending.route.path?.length
+        ? `Quoted route: ${pending.route.path
+            .map((step) => `${step.from}→${step.to}`)
+            .join(" · ")}`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    return {
+      language: intent.detectedLanguage,
+      requestedTransfer: {
+        amount: intent.amount || "0",
+        sourceCurrency,
+        recipientName: intent.recipientName || "Recipient",
+        recipientCountry: intent.recipientCountry || "",
+        recipientAddress: intent.recipientAddress || "",
+      },
+      executionPlan: {
+        executionSourceCurrency,
+        executionSourceAmount,
+        targetCurrency,
+        estimatedReceiveAmount: this.formatAmount(pending.route.estimatedOutput),
+        routeSummary,
+        requiresSwap:
+          !this.isDirectAssetTransfer(sourceCurrency) &&
+          executionSourceCurrency.trim().toLowerCase() !==
+            targetCurrency.trim().toLowerCase(),
+      },
+    };
   }
 
   private getNotificationChannels(): ("sms" | "whatsapp")[] {

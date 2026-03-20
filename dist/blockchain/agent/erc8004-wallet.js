@@ -180,7 +180,9 @@ function initializeAgentWallet(agentId, walletAddress, ownerAddress) {
 function getAgentWallet() {
     if (!agentWallet) {
         const envAddress = process.env.WALLET_ADDRESS;
-        const providerAddress = celo_provider_1.celoProvider.wallet.address;
+        const providerAddress = celo_provider_1.celoProvider.wallet?.address ||
+            envAddress ||
+            '0x0000000000000000000000000000000000000000';
         agentWallet = new ERC8004Wallet('celo-remittance-agent', envAddress || providerAddress);
     }
     return agentWallet;

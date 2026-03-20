@@ -340,6 +340,25 @@ body {
   border-radius: var(--radius-sm);
 }
 
+.wallet-signer-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(252, 255, 82, 0.18);
+  background: rgba(252, 255, 82, 0.08);
+  color: var(--text-primary);
+  text-decoration: none;
+  font-weight: 600;
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.wallet-signer-link:hover {
+  background: rgba(252, 255, 82, 0.14);
+  transform: translateY(-1px);
+}
+
 .wallet-status {
   display: flex;
   align-items: center;
@@ -1018,6 +1037,75 @@ body {
 
 .swap-preview {
   padding: 0 32px 16px;
+}
+
+.swap-wallet-signer {
+  padding: 0 32px 16px;
+}
+
+.swap-signer-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+}
+
+.swap-signer-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.swap-signer-header h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.swap-signer-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+}
+
+.swap-signer-status,
+.swap-signer-note {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+}
+
+.swap-signer-status.success {
+  border-color: rgba(53, 208, 127, 0.28);
+  color: var(--text-primary);
+}
+
+.swap-signer-status.error {
+  border-color: rgba(255, 90, 90, 0.4);
+  color: #ffb4b4;
+}
+
+.swap-signer-balances {
+  margin-top: 14px;
+}
+
+.swap-signer-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.signer-page-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .swap-preview-card {

@@ -87,6 +87,14 @@ async function retry<T>(fn: () => Promise<T>, attempts: number = 3, delayMs: num
  */
 export async function executeBlockchainTransfer(request: TransferRequest): Promise<ExecutionResult> {
   try {
+    if (!celoProvider.wallet) {
+      return {
+        success: false,
+        error: 'Backend signer unavailable. Restore a valid PRIVATE_KEY or complete execution through a connected wallet flow.',
+        status: 'failed',
+      };
+    }
+
     // Validate inputs
     if (!ethers.isAddress(request.recipient)) {
       return {

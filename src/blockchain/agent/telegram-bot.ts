@@ -9,6 +9,12 @@ import { Telegraf, Context, Markup } from 'telegraf';
 import * as dotenv from 'dotenv';
 import https from 'https';
 import { AgentOrchestrator, AgentResponse } from './orchestrator';
+import {
+  completeWalletApprovalSession,
+  createWalletApprovalSession,
+  failWalletApprovalSession,
+  getWalletApprovalSession,
+} from './wallet-approval-session';
 
 dotenv.config();
 
@@ -29,6 +35,7 @@ export class TelegramBotHandler {
   users: Map<number, TelegramUser> = new Map();
   private readonly telegramAgent: https.Agent;
   private started = false;
+  private botUsername: string | null = process.env.TELEGRAM_BOT_USERNAME || null;
 
   private readonly callbackActionMap: Record<string, string> = {
     transfer_confirm: 'yes, send it',
@@ -189,20 +196,41 @@ export class TelegramBotHandler {
    * Handles Markdown formatting and creates Clickable Buttons
    */
   private async sendResponse(ctx: Context, response: AgentResponse) {
+      const userId = ctx.from?.id;
+      const walletApprovalUrl =
+        userId && response.type === 'transfer_preview'
+          ? this.createWalletApprovalUrl(userId)
+          : null;
+
       // 1. Format Text: Convert **bold** to Telegram's *bold*
       // Note: We avoid special chars in MarkdownMode to prevent crashing
       let text = response.message
           .replace(/\*\*(.*?)\*\*/g, '*$1*') // Bold
           .replace(/__(.*?)__/g, '_$1_');    // Italics
 
+      if (walletApprovalUrl) {
+        text += '\n\n🔐 *Ready to send?* Use the wallet button below to approve this transfer.';
+      }
+
       // 2. Create Buttons (Inline Keyboard)
       let extra: any = { parse_mode: 'Markdown' };
 
       if (response.suggestedActions && response.suggestedActions.length > 0) {
-          // Create a grid of buttons (2 per row)
-          const buttons = response.suggestedActions.map(action =>
+          const filteredActions = walletApprovalUrl
+            ? response.suggestedActions.filter(
+                (action) => this.getCallbackData(action) !== 'transfer_confirm',
+              )
+            : response.suggestedActions;
+
+          const buttons: any[] = filteredActions.map(action =>
               Markup.button.callback(action, this.getCallbackData(action))
           );
+
+          if (walletApprovalUrl) {
+            buttons.unshift(
+              Markup.button.url('🔐 Connect wallet', walletApprovalUrl),
+            );
+          }
 
           extra.reply_markup = {
               inline_keyboard: this.chunkArray(buttons, 2)
@@ -285,6 +313,90 @@ export class TelegramBotHandler {
     return normalized.replace(/[^a-z0-9]+/g, '_').slice(0, 60) || 'action';
   }
 
+  private getPublicAppUrl(): string {
+    return (
+      process.env.PUBLIC_APP_URL ||
+      process.env.APP_URL ||
+      `http://localhost:${process.env.PORT || 3001}`
+    );
+  }
+
+  private createWalletApprovalUrl(userId: number): string | null {
+    const agent = this.getOrCreateAgent(userId);
+    const approvalContext = agent.getPendingWalletApprovalContext();
+    if (!approvalContext) return null;
+
+    const session = createWalletApprovalSession({
+      telegramUserId: userId,
+      language: approvalContext.language,
+      requestedTransfer: approvalContext.requestedTransfer,
+      executionPlan: approvalContext.executionPlan,
+    });
+
+    return `${this.getPublicAppUrl()}/connect?session=${encodeURIComponent(session.id)}`;
+  }
+
+  private async sendDirectResponse(
+    telegramUserId: number,
+    response: AgentResponse,
+  ): Promise<void> {
+    let text = response.message
+      .replace(/\*\*(.*?)\*\*/g, '*$1*')
+      .replace(/__(.*?)__/g, '_$1_');
+
+    const extra: any = { parse_mode: 'Markdown' };
+    if (response.suggestedActions && response.suggestedActions.length > 0) {
+      const buttons = response.suggestedActions.map((action) =>
+        Markup.button.callback(action, this.getCallbackData(action)),
+      );
+      extra.reply_markup = {
+        inline_keyboard: this.chunkArray(buttons, 2),
+      };
+    }
+
+    try {
+      await this.bot.telegram.sendMessage(telegramUserId, text, extra);
+    } catch (_error) {
+      delete extra.parse_mode;
+      await this.bot.telegram.sendMessage(
+        telegramUserId,
+        response.message,
+        extra,
+      );
+    }
+  }
+
+  async handleWalletApproval(sessionId: string, walletAddress: string) {
+    const session = getWalletApprovalSession(sessionId);
+    if (!session) {
+      throw new Error('Wallet approval session not found.');
+    }
+
+    const agent = this.getOrCreateAgent(session.telegramUserId);
+    const response = await agent.executeApprovedPendingTransfer(walletAddress);
+    if (response.type === 'receipt') {
+      completeWalletApprovalSession({
+        sessionId,
+        txHash: response.data?.blockchain?.txHash,
+        receiptMessage: response.message,
+      });
+    } else if (response.type === 'error') {
+      failWalletApprovalSession({
+        sessionId,
+        error: response.message,
+        receiptMessage: response.message,
+      });
+    }
+
+    await this.sendDirectResponse(session.telegramUserId, response);
+    return response;
+  }
+
+  getTelegramBotUrl(): string {
+    const username = this.botUsername || process.env.TELEGRAM_BOT_USERNAME || 'CeloRemit_Bot';
+    return `https://t.me/${username}`;
+  }
+
   /**
    * Start the bot
    */
@@ -294,6 +406,7 @@ export class TelegramBotHandler {
         return true;
       }
       const botInfo = await this.bot.telegram.getMe();
+      this.botUsername = botInfo.username || this.botUsername;
       console.log(`
 ✅ Telegram Bot Started
 ────────────────────────────────────────

@@ -24,8 +24,26 @@ const swapQuickFillBtn = document.getElementById('swapQuickFillBtn');
 const swapRefreshBalancesBtn = document.getElementById('swapRefreshBalancesBtn');
 const swapPreviewBtn = document.getElementById('swapPreviewBtn');
 const swapClearHistoryBtn = document.getElementById('swapClearHistoryBtn');
+const swapWalletConnectBtn = document.getElementById('swapWalletConnectBtn');
+const swapSignTransferBtn = document.getElementById('swapSignTransferBtn');
+const swapSignerStatus = document.getElementById('swapSignerStatus');
+const swapSignerBalances = document.getElementById('swapSignerBalances');
+const swapSignerNote = document.getElementById('swapSignerNote');
+const sidebarSignerLink = document.getElementById('sidebarSignerLink');
+const swapWalletSigner = document.getElementById('swapWalletSigner');
+const walletStatusText = document.getElementById('walletStatusText');
 
-const EXPLORER_BASE_URL = 'https://alfajores.celoscan.io/tx/';
+const DEFAULT_EXPLORER_BASE_URL = 'https://celo.blockscout.com/tx/';
+const ERC20_ABI = [
+  'function balanceOf(address account) view returns (uint256)',
+  'function decimals() view returns (uint8)',
+  'function transfer(address to, uint256 amount) returns (bool)',
+];
+
+let signerConfig = null;
+let swapBrowserProvider = null;
+let swapSigner = null;
+let swapConnectedAddress = null;
 
 // ==================== Navigation ====================
 document.querySelectorAll('.nav-item').forEach(btn => {
@@ -49,8 +67,17 @@ function switchView(viewName) {
   // Load data for non-chat views
   if (viewName === 'dashboard') loadDashboard();
   if (viewName === 'history') loadHistory();
-  if (viewName === 'swap') loadSwapBalances();
-  if (viewName === 'swap') renderSwapHistory();
+  if (viewName === 'swap') {
+    loadSwapBalances();
+    renderSwapHistory();
+    fetchSignerConfig()
+      .then(() => {
+        updateSwapSignerAvailability();
+      })
+      .catch((error) => {
+        setSwapSignerStatus(error?.message || 'Wallet signer config unavailable.', 'error');
+      });
+  }
 
   // Close mobile sidebar
   sidebar.classList.remove('mobile-open');
@@ -64,6 +91,32 @@ sidebarToggle.addEventListener('click', () => {
 mobileMenuBtn.addEventListener('click', () => {
   sidebar.classList.toggle('mobile-open');
 });
+
+if (sidebarSignerLink) {
+  sidebarSignerLink.addEventListener('click', async (event) => {
+    event.preventDefault();
+    sidebarSignerLink.textContent = 'Connecting...';
+    if (walletStatusText) {
+      walletStatusText.textContent = 'Waiting for wallet approval...';
+    }
+    try {
+      swapConnectedAddress = null;
+      swapSigner = null;
+      swapBrowserProvider = null;
+      await connectSwapWallet();
+      if (walletStatusText && swapConnectedAddress) {
+        walletStatusText.textContent = `Connected: ${swapConnectedAddress.slice(0, 6)}...${swapConnectedAddress.slice(-4)}`;
+      }
+      sidebarSignerLink.textContent = 'Wallet connected';
+    } catch (error) {
+      setSwapSignerStatus(error?.message || 'Failed to connect wallet.', 'error');
+      if (walletStatusText) {
+        walletStatusText.textContent = 'Wallet not connected';
+      }
+      sidebarSignerLink.textContent = 'Connect wallet';
+    }
+  });
+}
 
 // Close mobile sidebar on overlay click
 document.addEventListener('click', (e) => {
@@ -437,6 +490,231 @@ function updateStat(id, value) {
   }
 }
 
+// ==================== Wallet Signer Helpers ====================
+async function fetchSignerConfig() {
+  if (signerConfig) return signerConfig;
+  const res = await fetch(`${API_BASE}/api/wallet-signer/config`);
+  if (!res.ok) {
+    throw new Error('Failed to load wallet signer config.');
+  }
+  signerConfig = await res.json();
+  updateSwapSignerAvailability();
+  return signerConfig;
+}
+
+function normalizeWalletCurrency(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return raw;
+  const upper = raw.toUpperCase();
+  return signerConfig?.currencyAliases?.[upper] || raw;
+}
+
+function updateSwapSignerAvailability() {
+  if (!swapSignerNote) return;
+  const inputCurrency = document.getElementById('swapInputCurrency')?.value;
+  const outputCurrency = document.getElementById('swapOutputCurrency')?.value;
+  const direct = normalizeWalletCurrency(inputCurrency) === normalizeWalletCurrency(outputCurrency);
+
+  if (direct) {
+    swapSignerNote.textContent =
+      'This transfer can be signed directly from the connected wallet inside this app because the source and destination asset are the same.';
+    if (swapSignTransferBtn) swapSignTransferBtn.disabled = false;
+  } else {
+    swapSignerNote.textContent =
+      'Direct wallet signing currently works when the From and To assets match. For routed swaps, use the orchestrated Swap & Send flow in this app.';
+    if (swapSignTransferBtn) swapSignTransferBtn.disabled = false;
+  }
+}
+
+function setSwapSignerStatus(message, kind = '') {
+  if (!swapSignerStatus) return;
+  swapSignerStatus.className = 'swap-signer-status';
+  if (kind) swapSignerStatus.classList.add(kind);
+  swapSignerStatus.textContent = message;
+}
+
+async function ensureSwapSignerNetwork() {
+  await fetchSignerConfig();
+  if (!window.ethereum) {
+    throw new Error('No injected wallet found. Install MetaMask or another supported wallet.');
+  }
+
+  try {
+    await window.ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: signerConfig.network.chainIdHex }],
+    });
+  } catch (error) {
+    if (error?.code !== 4902) throw error;
+    await window.ethereum.request({
+      method: 'wallet_addEthereumChain',
+      params: [{
+        chainId: signerConfig.network.chainIdHex,
+        chainName: signerConfig.network.label,
+        nativeCurrency: {
+          name: 'Celo',
+          symbol: 'CELO',
+          decimals: 18,
+        },
+        rpcUrls: [signerConfig.network.rpcUrl],
+        blockExplorerUrls: [signerConfig.network.explorerBaseUrl],
+      }],
+    });
+  }
+}
+
+async function connectSwapWallet() {
+  if (!window.ethereum) {
+    throw new Error('No injected wallet found. Install MetaMask or another supported wallet.');
+  }
+
+  swapBrowserProvider = new ethers.BrowserProvider(window.ethereum);
+  await swapBrowserProvider.send('eth_requestAccounts', []);
+  await ensureSwapSignerNetwork();
+  swapBrowserProvider = new ethers.BrowserProvider(window.ethereum);
+  swapSigner = await swapBrowserProvider.getSigner();
+  swapConnectedAddress = await swapSigner.getAddress();
+  setSwapSignerStatus(`Connected wallet: ${swapConnectedAddress}`, 'success');
+  if (walletStatusText) {
+    walletStatusText.textContent = `Connected: ${swapConnectedAddress.slice(0, 6)}...${swapConnectedAddress.slice(-4)}`;
+  }
+  if (sidebarSignerLink) {
+    sidebarSignerLink.textContent = 'Wallet connected';
+  }
+  await loadSwapSignerBalances();
+}
+
+async function loadSwapSignerBalances() {
+  if (!swapSignerBalances) return;
+  if (!swapBrowserProvider || !swapConnectedAddress) {
+    swapSignerBalances.innerHTML = '<p class="empty-state">Connect a wallet to view direct signer balances.</p>';
+    return;
+  }
+
+  await fetchSignerConfig();
+  const balances = [];
+  const celoBalance = await swapBrowserProvider.getBalance(swapConnectedAddress);
+  balances.push({ symbol: 'CELO', value: ethers.formatEther(celoBalance) });
+
+  const visible = ['cUSD', 'cEUR', 'USDm', 'EURm', 'KESm', 'NGNm', 'PHPm'];
+  for (const symbol of visible) {
+    const address = signerConfig.stablecoinAddresses?.[symbol];
+    if (!address) continue;
+    try {
+      const contract = new ethers.Contract(address, ERC20_ABI, swapBrowserProvider);
+      const [bal, decimals] = await Promise.all([
+        contract.balanceOf(swapConnectedAddress),
+        contract.decimals(),
+      ]);
+      balances.push({ symbol, value: ethers.formatUnits(bal, decimals) });
+    } catch (_error) {
+      balances.push({ symbol, value: 'unavailable' });
+    }
+  }
+
+  swapSignerBalances.innerHTML = `<div class="balance-grid">${balances.map((entry) => `
+    <div class="balance-card">
+      <div class="balance-label">${entry.symbol}</div>
+      <div class="balance-value">${Number.isFinite(Number(entry.value)) ? Number(entry.value).toLocaleString() : entry.value}</div>
+    </div>
+  `).join('')}</div>`;
+}
+
+async function signDirectTransferFromSwapView() {
+  await fetchSignerConfig();
+
+  if (!swapSigner || !swapBrowserProvider || !swapConnectedAddress) {
+    setSwapSignerStatus('Connect a wallet before signing a transfer.', 'error');
+    return;
+  }
+
+  const recipient = document.getElementById('swapRecipient').value.trim();
+  const amount = document.getElementById('swapInputAmount').value;
+  const inputCurrency = normalizeWalletCurrency(document.getElementById('swapInputCurrency').value);
+  const outputCurrency = normalizeWalletCurrency(document.getElementById('swapOutputCurrency').value);
+
+  if (!recipient || !ethers.isAddress(recipient)) {
+    renderSwapResult({ status: 'error', message: 'Recipient address is invalid.' });
+    return;
+  }
+
+  if (!amount || Number(amount) <= 0) {
+    renderSwapResult({ status: 'error', message: 'Enter a valid amount before signing.' });
+    return;
+  }
+
+  if (inputCurrency !== outputCurrency) {
+    renderSwapResult({
+      status: 'error',
+      message: `Direct wallet signing currently supports same-asset transfers only. You selected ${inputCurrency} → ${outputCurrency}. Use the routed Swap & Send flow for this case.`,
+    });
+    return;
+  }
+
+  swapSignTransferBtn.disabled = true;
+  swapSignTransferBtn.textContent = 'Waiting for signature...';
+
+  try {
+    let tx;
+    if (inputCurrency === 'CELO') {
+      tx = await swapSigner.sendTransaction({
+        to: recipient,
+        value: ethers.parseEther(amount),
+      });
+    } else {
+      const tokenAddress = signerConfig.stablecoinAddresses?.[inputCurrency];
+      if (!tokenAddress) {
+        throw new Error(`Unsupported token for direct signing: ${inputCurrency}`);
+      }
+
+      const contract = new ethers.Contract(tokenAddress, ERC20_ABI, swapSigner);
+      const decimals = await contract.decimals();
+      tx = await contract.transfer(recipient, ethers.parseUnits(amount, decimals));
+    }
+
+    renderSwapResult({
+      status: 'pending',
+      message: 'Wallet transaction submitted',
+      details: {
+        recipient,
+        inputCurrency,
+        outputCurrency,
+        inputAmount: amount,
+        transfer: {
+          txHash: tx.hash,
+        },
+      },
+    });
+
+    const receipt = await tx.wait();
+    renderSwapResult({
+      status: 'success',
+      message: 'Direct wallet transfer confirmed',
+      details: {
+        recipient,
+        inputCurrency,
+        outputCurrency,
+        inputAmount: amount,
+        outputAmount: amount,
+        transfer: {
+          txHash: tx.hash,
+          blockNumber: receipt?.blockNumber,
+          gasUsed: receipt?.gasUsed?.toString?.() || '',
+        },
+      },
+    });
+
+    await loadSwapSignerBalances();
+    loadSwapBalances();
+  } catch (error) {
+    const message = error?.reason || error?.shortMessage || error?.message || 'Wallet signing failed.';
+    renderSwapResult({ status: 'error', message });
+  } finally {
+    swapSignTransferBtn.disabled = false;
+    swapSignTransferBtn.textContent = 'Sign Direct Transfer';
+  }
+}
+
 // ==================== Fee Comparison Page ====================
 compareBtn.addEventListener('click', async () => {
   const amount = document.getElementById('compareAmount').value;
@@ -688,6 +966,35 @@ if (swapClearHistoryBtn) {
   });
 }
 
+if (swapWalletConnectBtn) {
+  swapWalletConnectBtn.addEventListener('click', async () => {
+    swapWalletConnectBtn.disabled = true;
+    swapWalletConnectBtn.textContent = 'Connecting...';
+    try {
+      await connectSwapWallet();
+    } catch (error) {
+      setSwapSignerStatus(error?.message || 'Failed to connect wallet.', 'error');
+    } finally {
+      swapWalletConnectBtn.disabled = false;
+      swapWalletConnectBtn.textContent = 'Connect Wallet';
+    }
+  });
+}
+
+if (swapSignTransferBtn) {
+  swapSignTransferBtn.addEventListener('click', async () => {
+    await signDirectTransferFromSwapView();
+  });
+}
+
+['swapRecipient', 'swapInputAmount', 'swapInputCurrency', 'swapOutputCurrency'].forEach((id) => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener('input', updateSwapSignerAvailability);
+    el.addEventListener('change', updateSwapSignerAvailability);
+  }
+});
+
 async function loadSwapBalances() {
   const container = document.getElementById('swapBalances');
   if (!container) return;
@@ -862,7 +1169,10 @@ function renderSwapHistory() {
 function formatTxLink(txHash) {
   if (!txHash) return '—';
   const short = `${txHash.slice(0, 6)}…${txHash.slice(-4)}`;
-  return `<a class="tx-link" href="${EXPLORER_BASE_URL}${txHash}" target="_blank" rel="noopener noreferrer">${short}</a>`;
+  const explorerBase = signerConfig?.network?.explorerBaseUrl
+    ? `${signerConfig.network.explorerBaseUrl}/tx/`
+    : DEFAULT_EXPLORER_BASE_URL;
+  return `<a class="tx-link" href="${explorerBase}${txHash}" target="_blank" rel="noopener noreferrer">${short}</a>`;
 }
 
 // ==================== History Page ====================
@@ -928,4 +1238,12 @@ chatInput.focus();
   } catch (e) {
     console.warn('⚠️ Server not available yet');
   }
+
+  try {
+    await fetchSignerConfig();
+  } catch (e) {
+    console.warn('⚠️ Wallet signer config not available yet');
+  }
+
+  updateSwapSignerAvailability();
 })();

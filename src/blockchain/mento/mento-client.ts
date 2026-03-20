@@ -81,7 +81,15 @@ function getProvider(): ethersV6.JsonRpcProvider {
 export function getSignerWallet(): ethersV6.Wallet | null {
   if (!PRIVATE_KEY) return null;
   if (!signerWallet) {
-    signerWallet = new ethersV6.Wallet(PRIVATE_KEY, getProvider());
+    try {
+      signerWallet = new ethersV6.Wallet(PRIVATE_KEY, getProvider());
+    } catch (error) {
+      console.warn(
+        "[Mento] PRIVATE_KEY is invalid. Swap signing is disabled until a valid key is restored.",
+        error,
+      );
+      return null;
+    }
   }
   return signerWallet;
 }
