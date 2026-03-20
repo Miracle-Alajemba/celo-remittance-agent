@@ -8,10 +8,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.hasMeaningfulSavings = hasMeaningfulSavings;
 exports.compareFees = compareFees;
 exports.formatFeeComparison = formatFeeComparison;
 const axios_1 = __importDefault(require("axios"));
 const rates_1 = require("../market/rates");
+const MIN_MEANINGFUL_SEND_AMOUNT = Number(process.env.MIN_MEANINGFUL_COMPARE_AMOUNT || 1);
+const MIN_MEANINGFUL_SAVINGS_PERCENT = Number(process.env.MIN_MEANINGFUL_SAVINGS_PERCENT || 1);
 const PROVIDER_ESTIMATES = {
     "Western Union": {
         fixedFee: {
@@ -98,6 +101,11 @@ const SEND_COUNTRY_BY_CURRENCY = {
 };
 function round(num) {
     return Math.round(num * 100) / 100;
+}
+function hasMeaningfulSavings(comparison) {
+    return (comparison.sendAmount >= MIN_MEANINGFUL_SEND_AMOUNT &&
+        comparison.bestSavings > 0 &&
+        comparison.bestSavingsPercent >= MIN_MEANINGFUL_SAVINGS_PERCENT);
 }
 function getCorridorCode(sendCurrency, receiveCountry) {
     const source = SEND_COUNTRY_BY_CURRENCY[sendCurrency] || sendCurrency;
@@ -395,7 +403,10 @@ function formatFeeComparison(comparison, lang = "en") {
         output += `Rate: 1 ${sendCurrency} = ${provider.exchangeRate.toFixed(2)} ${receiveCurrency}\n`;
         output += `Delivery: ${provider.estimatedDelivery}\n`;
         output += `Quote: ${provider.quoteType || "estimated"}\n`;
-        if (provider.savings && provider.savings > 0) {
+        if (comparison.sendAmount >= MIN_MEANINGFUL_SEND_AMOUNT &&
+            provider.savings &&
+            provider.savings > 0 &&
+            (provider.savingsPercent || 0) >= MIN_MEANINGFUL_SAVINGS_PERCENT) {
             output += `You save: ${provider.savings.toLocaleString()} ${receiveCurrency}\n`;
         }
         output += "\n";

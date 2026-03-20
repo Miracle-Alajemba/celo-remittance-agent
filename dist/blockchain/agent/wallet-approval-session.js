@@ -47,8 +47,9 @@ function createWalletApprovalSession(params) {
     const id = `wa_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const session = {
         id,
-        channel: "telegram",
+        channel: params.channel,
         telegramUserId: params.telegramUserId,
+        whatsappPhoneNumber: params.whatsappPhoneNumber,
         createdAt,
         expiresAt,
         status: "pending",

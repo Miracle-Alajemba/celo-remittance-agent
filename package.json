@@ -12,8 +12,10 @@
     "test:database": "ts-node scripts/test-database.ts"
   },
   "dependencies": {
-    "@mento-protocol/mento-sdk": "^1.10.3",
     "@anthropic-ai/sdk": "^0.20.0",
+    "@mento-protocol/mento-sdk": "^1.10.3",
+    "@reown/appkit": "^1.8.19",
+    "@reown/appkit-adapter-ethers": "^1.8.19",
     "axios": "^1.6.0",
     "cors": "^2.8.6",
     "dotenv": "^16.3.1",

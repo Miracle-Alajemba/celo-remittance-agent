@@ -86,6 +86,9 @@ class ConversationMemory {
     getLastIntent() {
         return this.memory.lastRemittanceIntent;
     }
+    clearLastIntent() {
+        delete this.memory.lastRemittanceIntent;
+    }
     setUserProfile(profile) {
         this.memory.userProfile = { ...this.memory.userProfile, ...profile };
     }

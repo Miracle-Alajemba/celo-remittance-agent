@@ -26,7 +26,7 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
     wallet: ['wallet', 'address', 'my address', 'my wallet'],
     history: ['history', 'transactions', 'past', 'previous', 'records', 'receipts'],
     compare_fees: ['compare', 'comparison', 'view full comparison', 'fees', 'cheaper', 'cost', 'savings', 'save', 'western union', 'wise'],
-    schedule: ['schedule', 'recurring', 'every month', 'every week', 'automatic', 'auto'],
+    schedule: ['schedule', 'schedules', 'show schedules', 'view schedules', 'list schedules', 'recurring', 'every month', 'every week', 'automatic', 'auto'],
     cancel: ['cancel', 'stop', 'remove', 'delete', 'unschedule'],
     help: ['help', 'how', 'what can', 'guide', 'instructions'],
   },
@@ -37,7 +37,7 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
     wallet: ['billetera', 'cartera', 'mi dirección', 'mi wallet'],
     history: ['historial', 'transacciones', 'pasadas', 'anteriores', 'recibos'],
     compare_fees: ['comparar', 'comparación', 'ver comparación completa', 'tarifas', 'comisiones', 'más barato', 'costo', 'ahorro'],
-    schedule: ['programar', 'recurrente', 'cada mes', 'cada semana', 'automático'],
+    schedule: ['programar', 'recurrente', 'ver transferencias programadas', 'mostrar transferencias programadas', 'cada mes', 'cada semana', 'automático'],
     cancel: ['cancelar', 'detener', 'eliminar', 'borrar'],
     help: ['ayuda', 'cómo', 'qué puedo', 'guía', 'instrucciones'],
   },
@@ -48,7 +48,7 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
     wallet: ['carteira', 'meu endereço', 'minha carteira'],
     history: ['histórico', 'transações', 'passadas', 'anteriores', 'recibos'],
     compare_fees: ['comparar', 'comparação', 'ver comparação completa', 'taxas', 'tarifas', 'mais barato', 'custo', 'economia'],
-    schedule: ['agendar', 'programar', 'recorrente', 'todo mês', 'toda semana', 'automático'],
+    schedule: ['agendar', 'programar', 'recorrente', 'mostrar agendamentos', 'ver agendamentos', 'todo mês', 'toda semana', 'automático'],
     cancel: ['cancelar', 'parar', 'remover', 'deletar'],
     help: ['ajuda', 'como', 'o que posso', 'guia', 'instruções'],
   },
@@ -59,7 +59,7 @@ const ACTION_KEYWORDS: { [lang: string]: { [action: string]: string[] } } = {
     wallet: ['portefeuille', 'mon adresse'],
     history: ['historique', 'transactions', 'passées', 'précédentes', 'reçus'],
     compare_fees: ['comparer', 'comparaison', 'voir la comparaison complète', 'frais', 'commissions', 'moins cher', 'coût', 'économies'],
-    schedule: ['planifier', 'programmer', 'récurrent', 'chaque mois', 'chaque semaine', 'automatique'],
+    schedule: ['planifier', 'programmer', 'récurrent', 'voir les transferts programmés', 'afficher les transferts programmés', 'chaque mois', 'chaque semaine', 'automatique'],
     cancel: ['annuler', 'arrêter', 'supprimer'],
     help: ['aide', 'comment', 'que puis-je', 'guide', 'instructions'],
   },
@@ -199,18 +199,22 @@ export function parseRemittanceIntent(userInput: string): RemittanceIntent {
 
   // Extract amount - handles $50, 50 dollars, 100€, etc.
   const amountPatterns = [
-    /[\$€£]\s*(\d+(?:[.,]\d{1,2})?)/,
-    /(\d+(?:[.,]\d{1,2})?)\s*(?:dollars?|euros?|pounds?|dólares?|reais|pesos?|naira|shillings?)/i,
-    /(\d+(?:[.,]\d{1,2})?)\s*(?:usd|eur|gbp|brl|php|ngn|kes|xof|cop)/i,
-    /(\d+(?:[.,]\d{1,2})?)/,
+    /[\$€£]\s*(\d+(?:[.,]\d+)?)/,
+    /(\d+(?:[.,]\d+)?)\s*(?:dollars?|euros?|pounds?|dólares?|reais|pesos?|naira|shillings?)/i,
+    /(\d+(?:[.,]\d+)?)\s*(?:usd|eur|gbp|brl|php|ngn|kes|xof|cop)/i,
+    /(\d+(?:[.,]\d+)?)/,
   ];
 
   for (const pattern of amountPatterns) {
     const match = input.match(pattern);
     if (match) {
-      amount = match[1].replace(',', '.');
-      confidence += 0.2;
-      break;
+      const normalizedAmount = match[1].replace(',', '.');
+      const parsedAmount = Number.parseFloat(normalizedAmount);
+      if (Number.isFinite(parsedAmount) && parsedAmount > 0) {
+        amount = parsedAmount.toString();
+        confidence += 0.2;
+        break;
+      }
     }
   }
 

@@ -39,6 +39,13 @@ export interface FeeComparison {
   generatedAt: string;
 }
 
+const MIN_MEANINGFUL_SEND_AMOUNT = Number(
+  process.env.MIN_MEANINGFUL_COMPARE_AMOUNT || 1,
+);
+const MIN_MEANINGFUL_SAVINGS_PERCENT = Number(
+  process.env.MIN_MEANINGFUL_SAVINGS_PERCENT || 1,
+);
+
 type ProviderEstimateConfig = {
   fixedFee: { [corridor: string]: number };
   feePercent: number;
@@ -166,6 +173,14 @@ const SEND_COUNTRY_BY_CURRENCY: Record<string, string> = {
 
 function round(num: number): number {
   return Math.round(num * 100) / 100;
+}
+
+export function hasMeaningfulSavings(comparison: FeeComparison): boolean {
+  return (
+    comparison.sendAmount >= MIN_MEANINGFUL_SEND_AMOUNT &&
+    comparison.bestSavings > 0 &&
+    comparison.bestSavingsPercent >= MIN_MEANINGFUL_SAVINGS_PERCENT
+  );
 }
 
 function getCorridorCode(sendCurrency: string, receiveCountry: string): string {
@@ -601,7 +616,12 @@ export function formatFeeComparison(
     output += `Delivery: ${provider.estimatedDelivery}\n`;
     output += `Quote: ${provider.quoteType || "estimated"}\n`;
 
-    if (provider.savings && provider.savings > 0) {
+    if (
+      comparison.sendAmount >= MIN_MEANINGFUL_SEND_AMOUNT &&
+      provider.savings &&
+      provider.savings > 0 &&
+      (provider.savingsPercent || 0) >= MIN_MEANINGFUL_SAVINGS_PERCENT
+    ) {
       output += `You save: ${provider.savings.toLocaleString()} ${receiveCurrency}\n`;
     }
 

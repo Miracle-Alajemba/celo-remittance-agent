@@ -1,3 +1,4 @@
+import dns from "dns";
 import mongoose from "mongoose";
 
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -10,6 +11,7 @@ let reconnectAttempt = 0;
 let listenersInitialized = false;
 let lastMongoError: string | null = null;
 let lastMongoEventAt: string | null = null;
+let dnsConfigured = false;
 
 function setMongoEvent(message?: string | null): void {
   lastMongoEventAt = new Date().toISOString();
@@ -18,6 +20,43 @@ function setMongoEvent(message?: string | null): void {
 
 function getMongoUri(): string | undefined {
   return process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGO_URL;
+}
+
+function getMongoDbName(uri: string): string | undefined {
+  try {
+    const parsed = new URL(uri);
+    const dbName = parsed.pathname.replace(/^\//, "").trim();
+    return dbName || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function configureMongoDns(): void {
+  if (dnsConfigured) return;
+  dnsConfigured = true;
+
+  const configured =
+    process.env.MONGO_DNS_SERVERS ||
+    process.env.MONGODB_DNS_SERVERS ||
+    "1.1.1.1,8.8.8.8";
+
+  const servers = configured
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  if (servers.length === 0) {
+    return;
+  }
+
+  try {
+    dns.setServers(servers);
+    console.log(`🌐 MongoDB DNS servers set to ${servers.join(", ")}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`⚠️ Failed to set custom MongoDB DNS servers: ${message}`);
+  }
 }
 
 function clearReconnectTimer(): void {
@@ -85,6 +124,8 @@ async function attemptMongoConnect(origin: string): Promise<boolean> {
     return false;
   }
 
+  configureMongoDns();
+
   reconnectInFlight = true;
   reconnectAttempt += 1;
 
@@ -98,7 +139,7 @@ async function attemptMongoConnect(origin: string): Promise<boolean> {
       connectTimeoutMS: CONNECT_TIMEOUT_MS,
       socketTimeoutMS: CONNECT_TIMEOUT_MS,
       family: 4,
-      dbName: mongoose.connection.name || undefined,
+      dbName: getMongoDbName(mongoUri),
     });
 
     reconnectInFlight = false;

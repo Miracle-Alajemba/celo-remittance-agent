@@ -1,13 +1,13 @@
 :root {
-  --bg: #091018;
-  --card: rgba(17, 24, 39, 0.86);
-  --card-strong: rgba(12, 18, 28, 0.94);
+  --bg: #08121a;
+  --card: rgba(12, 22, 31, 0.9);
+  --card-strong: rgba(9, 17, 24, 0.96);
   --border: rgba(255, 255, 255, 0.08);
-  --text: #f3f7fa;
-  --muted: #9fb0bf;
-  --green: #35d07f;
-  --gold: #fcff52;
-  --danger: #ff6f61;
+  --text: #f5f8fb;
+  --muted: #9aa9b7;
+  --green: #3bd487;
+  --gold: #f1f67a;
+  --danger: #ff7a6b;
   --font-sans: "Inter", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
 }
@@ -22,9 +22,9 @@ body {
   font-family: var(--font-sans);
   color: var(--text);
   background:
-    radial-gradient(circle at top left, rgba(53, 208, 127, 0.18), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(252, 255, 82, 0.14), transparent 20%),
-    linear-gradient(160deg, #091018, #101826 55%, #0d1320);
+    radial-gradient(circle at top left, rgba(59, 212, 135, 0.2), transparent 30%),
+    radial-gradient(circle at top right, rgba(241, 246, 122, 0.08), transparent 22%),
+    linear-gradient(160deg, #08121a, #0d1924 52%, #0a141e);
 }
 
 .signer-shell {
@@ -32,27 +32,55 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px 18px;
+  padding: 28px 16px;
 }
 
 .signer-card {
-  width: min(860px, 100%);
+  position: relative;
+  width: min(460px, 100%);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 24px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-  padding: 28px;
-  backdrop-filter: blur(18px);
+  border-radius: 28px;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34);
+  padding: 28px 24px 22px;
+  backdrop-filter: blur(22px);
+}
+
+.signer-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(150deg, rgba(59, 212, 135, 0.28), rgba(255, 255, 255, 0.02), rgba(241, 246, 122, 0.18));
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+body.auth-mode .signer-card {
+  width: min(460px, 100%);
+}
+
+body.approval-mode .signer-card {
+  width: min(460px, 100%);
 }
 
 .eyebrow {
   display: inline-block;
-  margin-bottom: 12px;
-  color: var(--gold);
+  margin-bottom: 10px;
+  color: #d6f7e5;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
-  font-size: 0.76rem;
+  letter-spacing: 0.14em;
+  font-size: 0.72rem;
   font-weight: 800;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(59, 212, 135, 0.1);
+  border: 1px solid rgba(59, 212, 135, 0.16);
 }
 
 h1, h2 {
@@ -60,14 +88,17 @@ h1, h2 {
 }
 
 h1 {
-  font-size: clamp(2rem, 5vw, 3rem);
-  line-height: 1.05;
+  font-size: clamp(2rem, 5vw, 2.7rem);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
 }
 
 .lead {
   color: var(--muted);
-  margin: 14px 0 24px;
-  max-width: 64ch;
+  margin: 12px 0 18px;
+  max-width: 32ch;
+  font-size: 0.98rem;
+  line-height: 1.55;
 }
 
 .network-banner,
@@ -81,27 +112,28 @@ h1 {
 }
 
 .network-banner {
-  padding: 14px 16px;
-  margin-bottom: 16px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.88rem;
 }
 
 .actions-row {
   display: flex;
   gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .primary-btn,
 .secondary-btn {
   border: none;
   border-radius: 999px;
-  padding: 14px 18px;
+  padding: 15px 18px;
   font-weight: 700;
   font-family: var(--font-sans);
   cursor: pointer;
   text-decoration: none;
-  transition: transform 120ms ease, opacity 120ms ease;
+  transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
 }
 
 .primary-btn:hover,
@@ -112,6 +144,8 @@ h1 {
 .primary-btn {
   color: #07110a;
   background: linear-gradient(135deg, var(--green), var(--gold));
+  width: 100%;
+  box-shadow: 0 12px 30px rgba(59, 212, 135, 0.22);
 }
 
 .secondary-btn {
@@ -120,72 +154,91 @@ h1 {
   border: 1px solid var(--border);
 }
 
-.wide {
-  width: 100%;
+[hidden] {
+  display: none !important;
 }
 
 .wallet-status {
-  padding: 14px 16px;
+  padding: 12px 14px;
   margin-bottom: 16px;
   color: var(--muted);
+  font-size: 0.93rem;
 }
 
-.balances-card,
+body.auth-mode .network-banner,
+body.approval-mode .network-banner {
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 0.92rem;
+}
+
 .result-card {
-  padding: 18px;
-  margin-bottom: 16px;
+  padding: 16px;
+  margin-bottom: 14px;
 }
 
-.balances-card pre {
-  margin: 10px 0 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--font-mono);
-  color: #dce7ee;
-}
-
-.transfer-form {
-  padding: 18px;
-}
-
-.form-grid {
+.session-stack {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 
-label {
-  display: flex;
-  flex-direction: column;
+.session-pill {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  width: fit-content;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #d9e7f2;
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
-label span {
-  color: var(--muted);
-  font-size: 0.92rem;
+.session-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
 }
 
-input,
-select {
-  width: 100%;
-  padding: 14px;
-  border-radius: 14px;
+.session-item {
+  padding: 13px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  font: inherit;
 }
 
-code {
-  font-family: var(--font-mono);
-  font-size: 0.88rem;
-  color: #dbeafe;
-}
-
-.helper-text {
-  margin: 14px 0 18px;
+.session-label {
+  display: block;
+  margin-bottom: 6px;
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.session-value {
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.session-note {
+  padding: 14px 15px;
+  border-radius: 18px;
+  background: rgba(53, 208, 127, 0.08);
+  border: 1px solid rgba(53, 208, 127, 0.18);
+  color: #d8f7e5;
+  line-height: 1.45;
+}
+
+.session-note.error {
+  background: rgba(255, 111, 97, 0.08);
+  border-color: rgba(255, 111, 97, 0.2);
+  color: #ffd5cf;
+}
+
+.result-card a {
+  color: var(--gold);
 }
 
 .success {
@@ -203,10 +256,18 @@ code {
 
 @media (max-width: 720px) {
   .signer-card {
-    padding: 20px;
+    width: 100%;
+    padding: 22px 18px 18px;
+    border-radius: 24px;
   }
 
-  .form-grid {
-    grid-template-columns: 1fr;
+  .network-banner,
+  .wallet-status,
+  .result-card {
+    padding: 14px;
+  }
+
+  .lead {
+    font-size: 0.95rem;
   }
 }

@@ -60,6 +60,28 @@ function fillTemplate(template: string, payload: NotificationPayload): string {
     .replace(/{txHash}/g, payload.txHash ? payload.txHash.substring(0, 12) + '...' : 'N/A');
 }
 
+function isLikelyPlaceholderNumber(value?: string): boolean {
+  if (!value) return true;
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (/x{3,}/i.test(trimmed)) return true;
+  if (/^\+?1234567890$/.test(trimmed)) return true;
+  if (/^\+?123456\d+$/.test(trimmed)) return true;
+  return false;
+}
+
+function shouldMockNotificationTransport(to?: string): boolean {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  return (
+    !accountSid ||
+    !authToken ||
+    accountSid === 'your_twilio_account_sid' ||
+    authToken === 'your_twilio_auth_token' ||
+    isLikelyPlaceholderNumber(to)
+  );
+}
+
 export async function sendSMSNotification(
   payload: NotificationPayload,
   type: string = 'transfer_sent'
@@ -73,7 +95,7 @@ export async function sendSMSNotification(
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const fromNumber = process.env.TWILIO_PHONE_NUMBER;
 
-    if (!accountSid || !authToken || !fromNumber || accountSid === 'your_twilio_account_sid') {
+    if (!fromNumber || shouldMockNotificationTransport(payload.to)) {
       console.log(`[Mock SMS] To: ${payload.to} | Message: ${message}`);
       return {
         success: true,
@@ -119,7 +141,7 @@ export async function sendWhatsAppNotification(
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const whatsappNumber = process.env.TWILIO_WHATSAPP_NUMBER;
 
-    if (!accountSid || !authToken || accountSid === 'your_twilio_account_sid') {
+    if (shouldMockNotificationTransport(payload.to)) {
       console.log(`[Mock WhatsApp] To: ${payload.to} | Message: ${message}`);
       return {
         success: true,

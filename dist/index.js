@@ -72,6 +72,7 @@ const openclaw_adapter_1 = require("./blockchain/agent/openclaw-adapter");
 const network_config_1 = require("./blockchain/celo/network-config");
 const celo_provider_1 = require("./blockchain/celo/celo-provider");
 const wallet_approval_session_1 = require("./blockchain/agent/wallet-approval-session");
+const wallet_auth_session_1 = require("./blockchain/agent/wallet-auth-session");
 dotenv.config();
 (0, config_1.validateCoreConfig)();
 (0, rates_1.startRateRefresher)();
@@ -83,6 +84,45 @@ function parsePositiveAmount(value) {
     if (!Number.isFinite(num) || num <= 0)
         return null;
     return num;
+}
+function normalizeWalletExecutionCurrency(symbol) {
+    const upper = String(symbol || "").trim().toUpperCase();
+    const aliases = {
+        USD: "cUSD",
+        EUR: "cEUR",
+        BRL: "BRLm",
+        COP: "COPm",
+        XOF: "XOFm",
+        GHS: "GHSm",
+        KES: "KESm",
+        NGN: "NGNm",
+        PHP: "PHPm",
+        GBP: "GBPm",
+        INR: "INRm",
+        MXN: "MXNm",
+        CELO: "CELO",
+    };
+    return aliases[upper] || String(symbol || "").trim();
+}
+function getWhatsAppReturnUrl(phoneNumber) {
+    if (!phoneNumber)
+        return null;
+    const digits = String(phoneNumber).replace(/[^\d]/g, "");
+    if (!digits)
+        return null;
+    return `https://wa.me/${digits}`;
+}
+function getSessionReturnMeta(session) {
+    if (session.channel === "whatsapp") {
+        return {
+            returnUrl: getWhatsAppReturnUrl(session.whatsappPhoneNumber),
+            returnLabel: "Return to WhatsApp",
+        };
+    }
+    return {
+        returnUrl: (0, telegram_bot_1.getTelegramBot)().getTelegramBotUrl(),
+        returnLabel: "Return to Telegram",
+    };
 }
 // Middleware
 app.use((0, cors_1.default)());
@@ -430,6 +470,7 @@ app.get("/api/wallet-signer/config", (_req, res) => {
             rpcUrl: (0, network_config_1.getCeloRpcUrl)(),
             explorerBaseUrl,
         },
+        reownProjectId: process.env.REOWN_PROJECT_ID || "",
         backendSignerAvailable: Boolean(celo_provider_1.celoProvider.wallet),
         telegramBotUrl: (0, telegram_bot_1.getTelegramBot)().getTelegramBotUrl(),
         stablecoinAddresses: (0, network_config_1.getStablecoinAddresses)(),
@@ -450,6 +491,53 @@ app.get("/api/wallet-signer/config", (_req, res) => {
         },
     });
 });
+app.get("/api/wallet-auth/session/:sessionId", (req, res) => {
+    try {
+        const session = (0, wallet_auth_session_1.getWalletAuthSession)(req.params.sessionId);
+        if (!session) {
+            return res.status(404).json({ error: "Wallet sign-in session not found." });
+        }
+        const returnMeta = getSessionReturnMeta(session);
+        return res.json({
+            ...session,
+            telegramBotUrl: (0, telegram_bot_1.getTelegramBot)().getTelegramBotUrl(),
+            returnUrl: returnMeta.returnUrl,
+            returnLabel: returnMeta.returnLabel,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
+});
+app.post("/api/wallet-auth/session/:sessionId/approve", async (req, res) => {
+    try {
+        const { walletAddress, signature } = req.body;
+        if (!walletAddress || !signature) {
+            return res
+                .status(400)
+                .json({ error: "walletAddress and signature are required" });
+        }
+        const session = (0, wallet_auth_session_1.approveWalletAuthSession)({
+            sessionId: req.params.sessionId,
+            walletAddress,
+            signature,
+        });
+        const response = session.channel === "whatsapp"
+            ? await (0, whatsapp_bot_1.getWhatsAppBot)().handleWalletAuth(session.id, session.approvedWalletAddress || walletAddress)
+            : await (0, telegram_bot_1.getTelegramBot)().handleWalletAuth(session.id, session.approvedWalletAddress || walletAddress);
+        return res.json({
+            success: response.type !== "error",
+            sessionId: session.id,
+            status: response.type === "error" ? "failed" : "completed",
+            walletAddress: session.approvedWalletAddress || walletAddress,
+            botResponse: response.message,
+            ...getSessionReturnMeta(session),
+        });
+    }
+    catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
+});
 app.get("/api/wallet-approval/session/:sessionId", (req, res) => {
     try {
         const session = (0, wallet_approval_session_1.getWalletApprovalSession)(req.params.sessionId);
@@ -458,14 +546,49 @@ app.get("/api/wallet-approval/session/:sessionId", (req, res) => {
                 .status(404)
                 .json({ error: "Wallet approval session not found." });
         }
+        const returnMeta = getSessionReturnMeta(session);
         return res.json({
             ...session,
             backendSignerAvailable: Boolean(celo_provider_1.celoProvider.wallet),
             telegramBotUrl: (0, telegram_bot_1.getTelegramBot)().getTelegramBotUrl(),
+            returnUrl: returnMeta.returnUrl,
+            returnLabel: returnMeta.returnLabel,
         });
     }
     catch (error) {
         return res.status(500).json({ error: error.message });
+    }
+});
+app.get("/api/wallet-approval/session/:sessionId/execution", async (req, res) => {
+    try {
+        const session = (0, wallet_approval_session_1.getWalletApprovalSession)(req.params.sessionId);
+        if (!session) {
+            return res
+                .status(404)
+                .json({ error: "Wallet approval session not found." });
+        }
+        const executionCurrency = normalizeWalletExecutionCurrency(session.executionPlan.executionSourceCurrency);
+        const targetCurrency = normalizeWalletExecutionCurrency(session.executionPlan.targetCurrency);
+        let swapPlan = null;
+        if (session.executionPlan.requiresSwap) {
+            swapPlan = await (0, mento_integration_1.buildBrowserSwapExecutionPlan)(executionCurrency, targetCurrency, session.executionPlan.executionSourceAmount, Number(process.env.MENTO_MAX_SLIPPAGE || 0.01));
+        }
+        return res.json({
+            sessionId: session.id,
+            recipientAddress: session.requestedTransfer.recipientAddress,
+            recipientName: session.requestedTransfer.recipientName,
+            recipientCountry: session.requestedTransfer.recipientCountry,
+            executionSourceCurrency: executionCurrency,
+            executionSourceAmount: session.executionPlan.executionSourceAmount,
+            targetCurrency,
+            estimatedReceiveAmount: session.executionPlan.estimatedReceiveAmount,
+            requiresSwap: session.executionPlan.requiresSwap,
+            swapPlan,
+            stablecoinAddresses: (0, network_config_1.getStablecoinAddresses)(),
+        });
+    }
+    catch (error) {
+        return res.status(400).json({ error: error.message });
     }
 });
 app.post("/api/wallet-approval/session/:sessionId/approve", async (req, res) => {
@@ -481,8 +604,13 @@ app.post("/api/wallet-approval/session/:sessionId/approve", async (req, res) => 
             walletAddress,
             signature,
         });
-        const telegramBot = (0, telegram_bot_1.getTelegramBot)();
-        const response = await telegramBot.handleWalletApproval(session.id, session.approvedWalletAddress || walletAddress);
+        if (session.channel === "whatsapp") {
+            return res.status(400).json({
+                error: "WhatsApp approval sessions use direct wallet execution. Finish the transfer in the browser and let the completion step send the result back.",
+                ...getSessionReturnMeta(session),
+            });
+        }
+        const response = await (0, telegram_bot_1.getTelegramBot)().handleWalletApproval(session.id, session.approvedWalletAddress || walletAddress);
         return res.json({
             success: response.type !== "error",
             sessionId: session.id,
@@ -490,6 +618,69 @@ app.post("/api/wallet-approval/session/:sessionId/approve", async (req, res) => 
             walletAddress: session.approvedWalletAddress || walletAddress,
             botResponse: response.message,
             txHash: response.data?.blockchain?.txHash,
+            ...getSessionReturnMeta(session),
+        });
+    }
+    catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+app.post("/api/wallet-approval/session/:sessionId/complete", async (req, res) => {
+    try {
+        const { walletAddress, txHash, receiveAmount, receiveCurrency } = req.body;
+        if (!walletAddress || !txHash) {
+            return res
+                .status(400)
+                .json({ error: "walletAddress and txHash are required" });
+        }
+        const tx = await celo_provider_1.celoProvider.provider.getTransaction(txHash);
+        const receipt = await celo_provider_1.celoProvider.provider.getTransactionReceipt(txHash);
+        if (!tx || !receipt) {
+            return res.status(400).json({
+                error: "Transaction has not been confirmed on-chain yet.",
+            });
+        }
+        if ((tx.from || "").toLowerCase() !== walletAddress.toLowerCase()) {
+            return res.status(400).json({
+                error: "The submitted transaction was not broadcast by the connected wallet.",
+            });
+        }
+        if (receipt.status !== 1) {
+            return res.status(400).json({
+                error: "The submitted transaction failed on-chain.",
+            });
+        }
+        const session = (0, wallet_approval_session_1.getWalletApprovalSession)(req.params.sessionId);
+        if (!session) {
+            return res
+                .status(404)
+                .json({ error: "Wallet approval session not found." });
+        }
+        const response = session.channel === "whatsapp"
+            ? await (0, whatsapp_bot_1.getWhatsAppBot)().handleWalletExecutionCompletion({
+                sessionId: req.params.sessionId,
+                walletAddress,
+                txHash,
+                blockNumber: receipt.blockNumber,
+                gasUsed: receipt.gasUsed?.toString(),
+                receiveAmount,
+                receiveCurrency,
+            })
+            : await (0, telegram_bot_1.getTelegramBot)().handleWalletExecutionCompletion({
+                sessionId: req.params.sessionId,
+                walletAddress,
+                txHash,
+                blockNumber: receipt.blockNumber,
+                gasUsed: receipt.gasUsed?.toString(),
+                receiveAmount,
+                receiveCurrency,
+            });
+        return res.json({
+            success: response.type !== "error",
+            txHash,
+            blockNumber: receipt.blockNumber,
+            botResponse: response.message,
+            ...getSessionReturnMeta(session),
         });
     }
     catch (error) {
@@ -937,13 +1128,13 @@ app.get("/api/dashboard/stats", async (_req, res) => {
         // Calculate stats
         const totalTransactions = summary.totalTransactions || 0;
         const totalVolume = summary.totalSent || 0;
-        const successRate = 95; // All transactions are successful in current implementation
+        const successRate = 95;
         // Calculate average fee
         const avgFee = transactionHistory.length > 0
             ? (transactionHistory.reduce((sum, tx) => sum + (tx.fees.totalFee || 0), 0) / transactionHistory.length).toFixed(2)
             : 0;
         // Estimated savings vs competitors (assuming 3% Celo vs 7% average for competitors)
-        const estimatedSavings = (totalVolume * 0.04).toFixed(2); // 4% average savings
+        const estimatedSavings = (totalVolume * 0.04).toFixed(2);
         return res.json({
             overview: {
                 totalTransactions,
@@ -1093,7 +1284,7 @@ app.get("/api/dashboard/performance", (_req, res) => {
 });
 // Serve frontend for any unmatched routes
 app.get("*", (_req, res) => {
-    res.sendFile(path_1.default.join(__dirname, "../public/index.html"));
+    res.sendFile(path_1.default.join(__dirname, "../public/sign-transfer.html"));
 });
 // Start server
 async function startServer() {

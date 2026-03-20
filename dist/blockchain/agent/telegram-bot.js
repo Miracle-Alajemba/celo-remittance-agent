@@ -50,6 +50,7 @@ const dotenv = __importStar(require("dotenv"));
 const https_1 = __importDefault(require("https"));
 const orchestrator_1 = require("./orchestrator");
 const wallet_approval_session_1 = require("./wallet-approval-session");
+const wallet_auth_session_1 = require("./wallet-auth-session");
 dotenv.config();
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 class TelegramBotHandler {
@@ -191,6 +192,9 @@ class TelegramBotHandler {
      */
     async sendResponse(ctx, response) {
         const userId = ctx.from?.id;
+        const walletAuthUrl = userId && response.type === 'wallet_auth'
+            ? this.createWalletAuthUrl(userId)
+            : null;
         const walletApprovalUrl = userId && response.type === 'transfer_preview'
             ? this.createWalletApprovalUrl(userId)
             : null;
@@ -199,6 +203,9 @@ class TelegramBotHandler {
         let text = response.message
             .replace(/\*\*(.*?)\*\*/g, '*$1*') // Bold
             .replace(/__(.*?)__/g, '_$1_'); // Italics
+        if (walletAuthUrl) {
+            text += '\n\n🔐 *Ready to connect?* Use the wallet button below to sign in securely.';
+        }
         if (walletApprovalUrl) {
             text += '\n\n🔐 *Ready to send?* Use the wallet button below to approve this transfer.';
         }
@@ -207,8 +214,13 @@ class TelegramBotHandler {
         if (response.suggestedActions && response.suggestedActions.length > 0) {
             const filteredActions = walletApprovalUrl
                 ? response.suggestedActions.filter((action) => this.getCallbackData(action) !== 'transfer_confirm')
-                : response.suggestedActions;
+                : walletAuthUrl
+                    ? response.suggestedActions.filter((action) => this.getCallbackData(action) !== 'connect_wallet')
+                    : response.suggestedActions;
             const buttons = filteredActions.map(action => telegraf_1.Markup.button.callback(action, this.getCallbackData(action)));
+            if (walletAuthUrl) {
+                buttons.unshift(telegraf_1.Markup.button.url('🔐 Connect wallet', walletAuthUrl));
+            }
             if (walletApprovalUrl) {
                 buttons.unshift(telegraf_1.Markup.button.url('🔐 Connect wallet', walletApprovalUrl));
             }
@@ -266,6 +278,7 @@ class TelegramBotHandler {
     getCallbackData(action) {
         const normalized = action.trim().toLowerCase();
         const entries = [
+            [/connect wallet/, 'connect_wallet'],
             [/yes.*send|sí.*enviar|sim.*enviar|oui.*envoyer/, 'transfer_confirm'],
             [/cancel|cancelar|annuler/, 'transfer_cancel'],
             [/view full comparison|ver comparación completa|ver comparação completa|voir comparaison complète/, 'transfer_compare'],
@@ -296,12 +309,26 @@ class TelegramBotHandler {
         if (!approvalContext)
             return null;
         const session = (0, wallet_approval_session_1.createWalletApprovalSession)({
+            channel: 'telegram',
             telegramUserId: userId,
             language: approvalContext.language,
             requestedTransfer: approvalContext.requestedTransfer,
             executionPlan: approvalContext.executionPlan,
         });
         return `${this.getPublicAppUrl()}/connect?session=${encodeURIComponent(session.id)}`;
+    }
+    createWalletAuthUrl(userId) {
+        const agent = this.getOrCreateAgent(userId);
+        const authContext = agent.getPendingWalletAuthContext();
+        if (!authContext)
+            return null;
+        const session = (0, wallet_auth_session_1.createWalletAuthSession)({
+            channel: 'telegram',
+            telegramUserId: userId,
+            language: authContext.language,
+            reason: authContext.reason,
+        });
+        return `${this.getPublicAppUrl()}/connect?authSession=${encodeURIComponent(session.id)}`;
     }
     async sendDirectResponse(telegramUserId, response) {
         let text = response.message
@@ -327,6 +354,9 @@ class TelegramBotHandler {
         if (!session) {
             throw new Error('Wallet approval session not found.');
         }
+        if (session.channel !== 'telegram' || session.telegramUserId === undefined) {
+            throw new Error('Telegram wallet approval session not found.');
+        }
         const agent = this.getOrCreateAgent(session.telegramUserId);
         const response = await agent.executeApprovedPendingTransfer(walletAddress);
         if (response.type === 'receipt') {
@@ -340,6 +370,66 @@ class TelegramBotHandler {
             (0, wallet_approval_session_1.failWalletApprovalSession)({
                 sessionId,
                 error: response.message,
+                receiptMessage: response.message,
+            });
+        }
+        await this.sendDirectResponse(session.telegramUserId, response);
+        return response;
+    }
+    async handleWalletExecutionCompletion(params) {
+        const session = (0, wallet_approval_session_1.getWalletApprovalSession)(params.sessionId);
+        if (!session) {
+            throw new Error("Wallet approval session not found.");
+        }
+        if (session.channel !== 'telegram' || session.telegramUserId === undefined) {
+            throw new Error('Telegram wallet approval session not found.');
+        }
+        const agent = this.getOrCreateAgent(session.telegramUserId);
+        const response = await agent.finalizeWalletExecutedPendingTransfer({
+            walletAddress: params.walletAddress,
+            txHash: params.txHash,
+            blockNumber: params.blockNumber,
+            gasUsed: params.gasUsed,
+            receiveAmount: params.receiveAmount,
+            receiveCurrency: params.receiveCurrency,
+        });
+        if (response.type === "receipt") {
+            (0, wallet_approval_session_1.completeWalletApprovalSession)({
+                sessionId: params.sessionId,
+                txHash: params.txHash,
+                receiptMessage: response.message,
+            });
+        }
+        else if (response.type === "error") {
+            (0, wallet_approval_session_1.failWalletApprovalSession)({
+                sessionId: params.sessionId,
+                error: response.message,
+                receiptMessage: response.message,
+            });
+        }
+        await this.sendDirectResponse(session.telegramUserId, response);
+        return response;
+    }
+    async handleWalletAuth(sessionId, walletAddress) {
+        const session = (0, wallet_auth_session_1.getWalletAuthSession)(sessionId);
+        if (!session) {
+            throw new Error('Wallet sign-in session not found.');
+        }
+        if (session.channel !== 'telegram' || session.telegramUserId === undefined) {
+            throw new Error('Telegram wallet sign-in session not found.');
+        }
+        const agent = this.getOrCreateAgent(session.telegramUserId);
+        const response = await agent.completeWalletSignIn(walletAddress, session.reason);
+        if (response.type === 'error') {
+            (0, wallet_auth_session_1.failWalletAuthSession)({
+                sessionId,
+                error: response.message,
+                receiptMessage: response.message,
+            });
+        }
+        else {
+            (0, wallet_auth_session_1.completeWalletAuthSession)({
+                sessionId,
                 receiptMessage: response.message,
             });
         }

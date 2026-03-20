@@ -210,6 +210,10 @@ class AgentOrchestrator {
         }
         const balances = await (0, transaction_executor_1.getAllWalletBalances)(walletAddress);
         const requestedBalance = parseFloat(balances[requestedToken] || "0");
+        const visibleBalances = [requestedToken, "cUSD", "USDm", "cEUR", "EURm", "USDC"]
+            .filter((value, index, self) => self.indexOf(value) === index)
+            .map((token) => `${token}: ${this.formatAmount(parseFloat(balances[token] || "0"))}`)
+            .join(", ");
         if (requestedBalance >= amount - 1e-9) {
             return {
                 executionSourceCurrency: requestedSourceCurrency,
@@ -233,10 +237,28 @@ class AgentOrchestrator {
             if (!(candidateBalance > 0))
                 continue;
             const candidateFiat = this.toFiatCurrency(candidateToken);
+            let requiredCandidateAmount = null;
             const fxRate = (0, rates_1.getRate)(requestedFiat, candidateFiat);
-            if (!fxRate || !Number.isFinite(fxRate) || fxRate <= 0)
+            if (fxRate && Number.isFinite(fxRate) && fxRate > 0) {
+                requiredCandidateAmount = amount * fxRate;
+            }
+            else {
+                try {
+                    const unitQuote = await (0, mento_integration_1.getSwapQuote)(candidateToken, requestedToken, "1");
+                    const outputPerCandidate = parseFloat(unitQuote.outputAmount || "0");
+                    if (outputPerCandidate > 0) {
+                        requiredCandidateAmount = amount / outputPerCandidate;
+                    }
+                }
+                catch (error) {
+                    console.warn(`[FundingPlan] Quote fallback failed for ${candidateToken} -> ${requestedToken}:`, error);
+                }
+            }
+            if (requiredCandidateAmount === null ||
+                !Number.isFinite(requiredCandidateAmount) ||
+                requiredCandidateAmount <= 0) {
                 continue;
-            const requiredCandidateAmount = amount * fxRate;
+            }
             if (candidateBalance + 1e-9 < requiredCandidateAmount)
                 continue;
             return {
@@ -248,6 +270,8 @@ class AgentOrchestrator {
         return {
             executionSourceCurrency: requestedSourceCurrency,
             executionSourceAmount: this.formatAmount(amount),
+            insufficient: true,
+            availableBalanceSummary: visibleBalances,
         };
     }
     buildDirectAssetRoute(asset, amount) {
@@ -361,80 +385,52 @@ class AgentOrchestrator {
         if (hasWallet) {
             this.isFirstInteraction = false;
         }
-        // Capture wallet address if user provides it directly
-        const directAddress = this.extractAddress(userMessage);
-        if (directAddress &&
-            !this.pendingSendIntent &&
-            /wallet|address|cartera|billetera|carteira|portefeuille/i.test(userMessage)) {
-            const lang = preferredLang || "en";
-            return await this.saveSenderWalletAddress(directAddress, lang, "balance");
-        }
+        const earlyIntent = (0, intent_parser_1.parseRemittanceIntent)(userMessage);
+        const normalizedEarlyAction = earlyIntent.action;
+        const isSlashCommand = userMessage.trim().startsWith("/");
+        const lowerEarlyMessage = userMessage.toLowerCase().trim();
+        const overridesPendingSend = isSlashCommand ||
+            normalizedEarlyAction === "check_balance" ||
+            normalizedEarlyAction === "wallet" ||
+            normalizedEarlyAction === "history" ||
+            normalizedEarlyAction === "schedule" ||
+            normalizedEarlyAction === "compare_fees" ||
+            normalizedEarlyAction === "swap" ||
+            normalizedEarlyAction === "cancel" ||
+            normalizedEarlyAction === "help";
         // Handle pending send intent slot-filling
         if (this.pendingSendIntent) {
-            const addr = this.extractAddress(userMessage);
-            if (addr) {
-                const merged = {
-                    ...this.pendingSendIntent,
-                    recipientAddress: addr,
-                    action: "send",
-                };
+            if (overridesPendingSend) {
+                this.pendingSendIntent = null;
+            }
+            else {
+                const addr = this.extractAddress(userMessage);
+                if (addr) {
+                    const merged = {
+                        ...this.pendingSendIntent,
+                        recipientAddress: addr,
+                        action: "send",
+                    };
+                    this.pendingSendIntent = null;
+                    return await this.handleSendIntent(merged);
+                }
+                const partial = (0, intent_parser_1.parseRemittanceIntent)(userMessage);
+                const merged = this.mergeIntent(this.pendingSendIntent, partial);
                 this.pendingSendIntent = null;
                 return await this.handleSendIntent(merged);
             }
-            const partial = (0, intent_parser_1.parseRemittanceIntent)(userMessage);
-            const merged = this.mergeIntent(this.pendingSendIntent, partial);
-            this.pendingSendIntent = null;
-            return await this.handleSendIntent(merged);
         }
         // Handle pending wallet address capture - ENFORCE WALLET FIRST
         if (this.pendingWalletRequest) {
-            const address = this.extractAddress(userMessage);
-            if (address) {
-                const lang = preferredLang || "en";
-                const requestSource = this.pendingWalletRequestSource;
-                return await this.saveSenderWalletAddress(address, lang, requestSource);
-            }
-            else {
-                // No wallet address found - keep asking
-                const lang = preferredLang ||
-                    this.memory.getLastIntent()?.detectedLanguage ||
-                    "en";
-                const msg = this.pendingWalletRequestSource === "onboarding"
-                    ? lang === "es"
-                        ? "⚠️ Primero comparte tu propia dirección de billetera remitente (0x...). Más tarde te pediré la del destinatario."
-                        : lang === "pt"
-                            ? "⚠️ Primeiro compartilhe seu proprio endereco de carteira remetente (0x...). Depois eu vou pedir o do destinatario."
-                            : lang === "fr"
-                                ? "⚠️ Veuillez d’abord partager votre propre adresse de portefeuille expéditeur (0x...). Je demanderai ensuite celle du destinataire."
-                                : "⚠️ Please share your own sender wallet address first (0x...). I’ll ask for the recipient’s wallet later."
-                    : lang === "es"
-                        ? "⚠️ Por favor comparte tu propia dirección de billetera remitente (0x...)."
-                        : lang === "pt"
-                            ? "⚠️ Por favor compartilhe seu proprio endereco de carteira remetente (0x...)."
-                            : lang === "fr"
-                                ? "⚠️ Veuillez partager votre propre adresse de portefeuille expéditeur (0x...)."
-                                : "⚠️ Please share your own wallet address (your sender wallet, 0x...).";
-                return this.createResponse(msg, "text", lang);
-            }
+            return this.createWalletAuthPrompt(preferredLang || this.memory.getLastIntent()?.detectedLanguage || "en", this.pendingWalletRequestSource);
         }
         if (!hasWallet && this.isFirstInteraction) {
             const lang = preferredLang || (0, intent_parser_1.parseRemittanceIntent)(userMessage).detectedLanguage || "en";
             this.isFirstInteraction = false;
             this.pendingWalletRequest = true;
             this.pendingWalletRequestSource = "onboarding";
-            const onboardingMsg = lang === "es"
-                ? "👋 Bienvenido. Antes de enviar dinero, necesito tu propia dirección de billetera remitente (0x...). En cuanto la envíes, te mostraré tu saldo."
-                : lang === "pt"
-                    ? "👋 Bem-vindo. Antes de enviar dinheiro, preciso do seu proprio endereco de carteira remetente (0x...). Assim que voce enviar, eu mostro seu saldo."
-                    : lang === "fr"
-                        ? "👋 Bienvenue. Avant d’envoyer de l’argent, j’ai besoin de votre propre adresse de portefeuille expéditeur (0x...). Dès que vous l’envoyez, je vous montre votre solde."
-                        : "👋 Welcome to Celo Remittance Agent. I help you send money globally, compare fees, and track transfers using Celo stablecoins.\n\nTo get started, please share your own sender wallet address (0x...). Once I have it, I’ll show your balance and you’ll be ready to make a transfer.";
-            return this.createResponse(onboardingMsg, "text", lang);
+            return this.createWalletAuthPrompt(lang, "onboarding");
         }
-        const earlyIntent = (0, intent_parser_1.parseRemittanceIntent)(userMessage);
-        const normalizedEarlyAction = earlyIntent.action;
-        const isSlashCommand = userMessage.trim().startsWith("/");
-        const lowerEarlyMessage = userMessage.toLowerCase().trim();
         const looksLikeTransferConfirmation = /yes|si|sí|sim|oui|ok|proceed|confirm|send it|enviar|envoyer/.test(lowerEarlyMessage) ||
             /cancel|cancelar|annuler|stop|non|no/.test(lowerEarlyMessage) ||
             /comparison|comparar|comparação|comparaison|compare/.test(lowerEarlyMessage);
@@ -501,6 +497,72 @@ class AgentOrchestrator {
                 "Compare fees",
             ]);
         }
+        const directCommandActions = new Set([
+            "check_balance",
+            "wallet",
+            "history",
+            "schedule",
+            "cancel",
+        ]);
+        if (isSlashCommand) {
+            const slashCommand = lowerEarlyMessage.replace(/^\//, "").split(/\s+/)[0];
+            const slashLang = preferredLang || earlyIntent.detectedLanguage || "en";
+            let slashIntent = null;
+            if (slashCommand === "start" || slashCommand === "help") {
+                slashIntent = {
+                    ...earlyIntent,
+                    action: "help",
+                    detectedLanguage: slashLang,
+                };
+            }
+            else if (slashCommand === "balance") {
+                slashIntent = {
+                    ...earlyIntent,
+                    action: "check_balance",
+                    detectedLanguage: slashLang,
+                };
+            }
+            else if (slashCommand === "history") {
+                slashIntent = {
+                    ...earlyIntent,
+                    action: "history",
+                    detectedLanguage: slashLang,
+                };
+            }
+            else if (slashCommand === "wallet") {
+                slashIntent = {
+                    ...earlyIntent,
+                    action: "wallet",
+                    detectedLanguage: slashLang,
+                };
+            }
+            else if (slashCommand === "schedule" || slashCommand === "schedules") {
+                slashIntent = {
+                    ...earlyIntent,
+                    action: "schedule",
+                    amount: undefined,
+                    detectedLanguage: slashLang,
+                };
+            }
+            else if (slashCommand === "cancel") {
+                slashIntent = {
+                    ...earlyIntent,
+                    action: "cancel",
+                    detectedLanguage: slashLang,
+                };
+            }
+            if (slashIntent) {
+                return await this.routeIntent(slashIntent, slashLang, userMessage);
+            }
+        }
+        if (directCommandActions.has(normalizedEarlyAction)) {
+            const directLang = preferredLang || earlyIntent.detectedLanguage || "en";
+            const directIntent = {
+                ...earlyIntent,
+                detectedLanguage: directLang,
+            };
+            return await this.routeIntent(directIntent, directLang, userMessage);
+        }
         // Parse intent (keyword-based as fallback)
         let intent = earlyIntent;
         let lang = intent.detectedLanguage;
@@ -562,13 +624,15 @@ class AgentOrchestrator {
             intent = this.mergeIntent(lastIntent, intent);
             intent.action = "compare_fees";
         }
+        return await this.routeIntent(intent, lang, userMessage);
+    }
+    async routeIntent(intent, lang, userMessage) {
         this.memory.setLastIntent(intent);
-        // Route to appropriate handler
         switch (intent.action) {
             case "send":
                 return await this.handleSendIntent(intent);
             case "check_balance":
-                return await this.handleBalanceCheck(lang); // 👈 AWAIT ADDED HERE
+                return await this.handleBalanceCheck(lang);
             case "wallet":
                 return await this.handleWalletInfo(lang, userMessage);
             case "history":
@@ -625,6 +689,18 @@ class AgentOrchestrator {
                 executionSourceAmount: this.formatAmount(amount),
             }
             : await this.resolveExecutionFundingPlan(sourceCurrency, amount);
+        if (!isDirectAssetTransfer && fundingPlan.insufficient) {
+            const insufficientMsg = lang === "es"
+                ? `❌ No tienes suficiente saldo para esta transferencia. Necesitas ${intent.amount || "0"} ${sourceCurrency} o un saldo equivalente en una stablecoin compatible.\n\nDisponible: ${fundingPlan.availableBalanceSummary || "saldo insuficiente"}`
+                : lang === "pt"
+                    ? `❌ Você não tem saldo suficiente para esta transferência. Você precisa de ${intent.amount || "0"} ${sourceCurrency} ou saldo equivalente em uma stablecoin compatível.\n\nDisponível: ${fundingPlan.availableBalanceSummary || "saldo insuficiente"}`
+                    : lang === "fr"
+                        ? `❌ Vous n’avez pas assez de solde pour ce transfert. Il vous faut ${intent.amount || "0"} ${sourceCurrency} ou un solde équivalent dans un stablecoin compatible.\n\nDisponible : ${fundingPlan.availableBalanceSummary || "solde insuffisant"}`
+                        : `❌ You do not have enough balance for this transfer. You need ${intent.amount || "0"} ${sourceCurrency} or an equivalent balance in a supported stablecoin.\n\nAvailable: ${fundingPlan.availableBalanceSummary || "insufficient balance"}`;
+            const response = this.createResponse(insufficientMsg, "error", lang, ["Check balance", "Swap", "Send money"]);
+            this.memory.addMessage("agent", response.message);
+            return response;
+        }
         const targetCurrency = isDirectAssetTransfer
             ? sourceCurrency
             : intent.targetCurrency || this.getTargetCurrency(intent.recipientCountry);
@@ -652,7 +728,7 @@ class AgentOrchestrator {
             routeInfo += `🛤️ **Route:** ${bestRoute.path.map((h) => `${h.from}→${h.to}`).join(" → ")}`;
         }
         // Add fee comparison summary
-        if (comparison) {
+        if (comparison && (0, fee_comparator_1.hasMeaningfulSavings)(comparison)) {
             routeInfo += `\n\n💡 **You save up to ${comparison.bestSavingsPercent}%** compared to traditional providers!`;
         }
         else if (isDirectAssetTransfer) {
@@ -1034,7 +1110,10 @@ class AgentOrchestrator {
                 });
             }
             // Clear pending
+            this.pendingSendIntent = null;
             this.pendingConfirmation = null;
+            this.pendingSwapConfirmation = null;
+            this.memory.clearLastIntent();
             const countryName = COUNTRY_NAMES[intent.recipientCountry || ""]?.[lang] ||
                 intent.recipientCountry ||
                 "Unknown";
@@ -1088,16 +1167,9 @@ class AgentOrchestrator {
             this.getUserWalletAddress(user?.walletAddress) ||
             this.getUserWalletAddress(this.walletAddress);
         if (!walletAddress) {
-            const prompt = lang === "es"
-                ? "Primero envíame tu dirección de billetera (0x...) para consultar tu saldo."
-                : lang === "pt"
-                    ? "Primeiro, envie seu endereço de carteira (0x...) para consultar seu saldo."
-                    : lang === "fr"
-                        ? "Veuillez d’abord envoyer votre adresse de portefeuille (0x...) pour vérifier le solde."
-                        : "Please send your own wallet address first (your sender wallet, 0x...) so I can check your balance.";
             this.pendingWalletRequest = true;
             this.pendingWalletRequestSource = "balance";
-            return this.createResponse(prompt, "text", lang);
+            return this.createWalletAuthPrompt(lang, "balance");
         }
         try {
             // Fetch REAL balances from the Celo blockchain
@@ -1128,18 +1200,6 @@ class AgentOrchestrator {
         }
     }
     async handleWalletInfo(lang, userMessage) {
-        const address = this.extractAddress(userMessage || "");
-        if (address) {
-            await (0, user_profile_1.updateUserProfile)(this.userId, { walletAddress: address });
-            this.walletAddress = address;
-            this.memory.setUserProfile({ walletAddress: address });
-            this.pendingWalletRequest = false;
-            const msg = `✅ Your sender wallet address has been saved: ${address}`;
-            return this.createResponse(msg, "text", lang, [
-                "Check balance",
-                "Send money",
-            ]);
-        }
         const user = await (0, user_profile_1.getUser)(this.userId);
         if (user?.walletAddress) {
             this.walletAddress = user.walletAddress;
@@ -1159,14 +1219,7 @@ class AgentOrchestrator {
         if (!hasUserWallet) {
             this.pendingWalletRequest = true;
             this.pendingWalletRequestSource = "wallet";
-            const prompt = lang === "es"
-                ? "Por favor envíame tu dirección de billetera (0x...)."
-                : lang === "pt"
-                    ? "Por favor me envie seu endereço de carteira (0x...)."
-                    : lang === "fr"
-                        ? "Veuillez m’envoyer votre adresse de portefeuille (0x...)."
-                        : "Please send me your own wallet address (your sender wallet, 0x...).";
-            return this.createResponse(prompt, "text", lang);
+            return this.createWalletAuthPrompt(lang, "wallet");
         }
         const msg = (labels[lang] || labels["en"]).replace("{address}", userWallet);
         return this.createResponse(msg, "text", lang, [
@@ -1265,14 +1318,7 @@ class AgentOrchestrator {
         if (!this.getUserWalletAddress(this.memory.getUserProfile().walletAddress)) {
             this.pendingWalletRequest = true;
             this.pendingWalletRequestSource = "onboarding";
-            const onboardingMsg = lang === "es"
-                ? "👋 Bienvenido. Primero envíame tu propia dirección de billetera remitente (0x...). Después te mostraré tu saldo."
-                : lang === "pt"
-                    ? "👋 Bem-vindo. Primeiro me envie seu proprio endereco de carteira remetente (0x...). Depois eu mostro seu saldo."
-                    : lang === "fr"
-                        ? "👋 Bienvenue. Envoyez-moi d’abord votre propre adresse de portefeuille expéditeur (0x...). Ensuite, je vous montrerai votre solde."
-                        : "👋 Welcome to Celo Remittance Agent. I can help you send money globally, compare remittance fees, and track your transfers.\n\nBefore we begin, please share your own sender wallet address (0x...). Once I have it, I’ll show your balance.";
-            return this.createResponse(onboardingMsg, "text", lang);
+            return this.createWalletAuthPrompt(lang, "onboarding");
         }
         const responses = RESPONSES[lang] || RESPONSES["en"];
         const response = this.createResponse(responses["greeting"], "help", lang, [
@@ -1286,6 +1332,41 @@ class AgentOrchestrator {
     }
     createResponse(message, type, lang, suggestedActions) {
         return { message, type, language: lang, suggestedActions };
+    }
+    createWalletAuthPrompt(lang, requestSource) {
+        this.pendingWalletRequest = true;
+        this.pendingWalletRequestSource = requestSource;
+        const message = requestSource === "onboarding"
+            ? lang === "es"
+                ? "👋 Bienvenido a CeloRemit.\n\nAntes de continuar, conecta y firma con tu billetera para que pueda verificar tu cuenta y mostrarte tu saldo real."
+                : lang === "pt"
+                    ? "👋 Bem-vindo ao CeloRemit.\n\nAntes de continuar, conecte e assine com sua carteira para que eu possa verificar sua conta e mostrar seu saldo real."
+                    : lang === "fr"
+                        ? "👋 Bienvenue sur CeloRemit.\n\nAvant de continuer, connectez et signez avec votre portefeuille pour que je puisse vérifier votre compte et afficher votre solde réel."
+                        : "👋 Welcome to CeloRemit.\n\nBefore we continue, connect and sign with your wallet so I can verify your account and show your real balance."
+            : requestSource === "balance"
+                ? lang === "es"
+                    ? "🔐 Para consultar tu saldo, primero conecta y firma con tu billetera."
+                    : lang === "pt"
+                        ? "🔐 Para verificar seu saldo, primeiro conecte e assine com sua carteira."
+                        : lang === "fr"
+                            ? "🔐 Pour consulter votre solde, connectez et signez d’abord avec votre portefeuille."
+                            : "🔐 To check your balance, first connect and sign with your wallet."
+                : lang === "es"
+                    ? "🔐 Conecta y firma con tu billetera para que pueda mostrarte la cartera vinculada a tu cuenta."
+                    : lang === "pt"
+                        ? "🔐 Conecte e assine com sua carteira para que eu possa mostrar a carteira vinculada à sua conta."
+                        : lang === "fr"
+                            ? "🔐 Connectez et signez avec votre portefeuille pour que je puisse afficher le portefeuille lié à votre compte."
+                            : "🔐 Connect and sign with your wallet so I can show the wallet linked to your account.";
+        const actions = lang === "es"
+            ? ["🔐 Connect wallet", "Help"]
+            : lang === "pt"
+                ? ["🔐 Connect wallet", "Ajuda"]
+                : lang === "fr"
+                    ? ["🔐 Connect wallet", "Aide"]
+                    : ["🔐 Connect wallet", "Help"];
+        return this.createResponse(message, "wallet_auth", lang, actions);
     }
     async saveSenderWalletAddress(address, lang, requestSource) {
         const existingWalletOwner = await (0, user_profile_1.getUserByWalletAddress)(address);
@@ -1425,17 +1506,28 @@ class AgentOrchestrator {
         this.memory.clear();
         this.pendingSendIntent = null;
         this.pendingConfirmation = null;
+        this.pendingSwapConfirmation = null;
         this.pendingWalletRequest = false;
         this.pendingWalletRequestSource = "onboarding";
     }
     clearPendingTransferFlow() {
         this.pendingSendIntent = null;
         this.pendingConfirmation = null;
+        this.pendingSwapConfirmation = null;
+        this.memory.clearLastIntent();
     }
     async linkSenderWalletAddress(address) {
         await (0, user_profile_1.updateUserProfile)(this.userId, { walletAddress: address });
         this.walletAddress = address;
         this.memory.setUserProfile({ walletAddress: address });
+        this.pendingWalletRequest = false;
+        this.pendingWalletRequestSource = "onboarding";
+    }
+    async completeWalletSignIn(address, requestSource) {
+        const lang = this.memory.getUserProfile().preferredLanguage ||
+            this.memory.getLastIntent()?.detectedLanguage ||
+            "en";
+        return this.saveSenderWalletAddress(address, lang, requestSource);
     }
     async executeApprovedPendingTransfer(approvedWalletAddress) {
         if (!this.pendingConfirmation) {
@@ -1456,6 +1548,133 @@ class AgentOrchestrator {
         }
         await this.linkSenderWalletAddress(approvedWalletAddress);
         return this.handleConfirmation("yes, send it");
+    }
+    async finalizeWalletExecutedPendingTransfer(params) {
+        if (!this.pendingConfirmation) {
+            return this.createResponse('⚠️ I do not have a pending transfer to confirm. Start with something like: "Send $50 to the Philippines".', "text", "en", ["Send money", "Compare fees"]);
+        }
+        const pending = this.pendingConfirmation;
+        const intent = pending.intent;
+        const route = pending.route;
+        const lang = intent.detectedLanguage || "en";
+        const expectedWallet = this.getUserWalletAddress(this.memory.getUserProfile().walletAddress) ||
+            this.getUserWalletAddress(this.walletAddress);
+        if (!params.walletAddress || !this.extractAddress(params.walletAddress)) {
+            return this.createResponse("❌ Wallet execution failed because the connected wallet address is invalid.", "error", lang);
+        }
+        if (expectedWallet &&
+            expectedWallet.toLowerCase() !== params.walletAddress.toLowerCase()) {
+            return this.createResponse(`❌ This transfer is linked to ${expectedWallet}, but the broadcast transaction came from ${params.walletAddress}. Please use the same wallet you linked in the bot.`, "error", lang, ["Check balance", "My wallet"]);
+        }
+        const recipientAddress = intent.recipientAddress ||
+            process.env.RECIPIENT_ADDRESS ||
+            "0x1234567890123456789012345678901234567890";
+        const sourceCurrency = intent.sourceCurrency || "USD";
+        const isDirectAssetTransfer = this.isDirectAssetTransfer(sourceCurrency);
+        const targetCurrency = isDirectAssetTransfer
+            ? sourceCurrency
+            : intent.targetCurrency ||
+                this.getTargetCurrency(intent.recipientCountry || "");
+        const executionSourceCurrency = pending.executionSourceCurrency || sourceCurrency;
+        const receiveCurrency = params.receiveCurrency ||
+            (executionSourceCurrency.trim().toLowerCase() !==
+                targetCurrency.trim().toLowerCase()
+                ? this.mapToBlockchainToken(targetCurrency)
+                : executionSourceCurrency);
+        const receiveAmount = Number(params.receiveAmount ||
+            (isDirectAssetTransfer
+                ? intent.amount || "0"
+                : route.estimatedOutput.toString()));
+        await this.linkSenderWalletAddress(params.walletAddress);
+        const txRecord = (0, transaction_history_1.recordTransaction)({
+            type: intent.frequency !== "once" ? "scheduled" : "send",
+            sender: params.walletAddress,
+            recipientName: intent.recipientName,
+            recipientAddress,
+            recipientCountry: intent.recipientCountry,
+            sendAmount: parseFloat(intent.amount || "0"),
+            sendCurrency: sourceCurrency,
+            receiveAmount,
+            receiveCurrency,
+            exchangeRate: parseFloat(intent.amount || "0") > 0
+                ? receiveAmount / parseFloat(intent.amount || "0")
+                : route.path[0]?.rate || 0,
+            networkFee: 0.001,
+            swapFee: route.totalFeeUSD,
+            txHash: params.txHash,
+            blockNumber: params.blockNumber,
+            gasUsed: params.gasUsed,
+            network: (0, network_config_1.getCeloNetworkLabel)(),
+        });
+        if ((0, connection_1.isDbConnected)()) {
+            try {
+                await (0, services_1.createTransaction)({
+                    userId: this.userId,
+                    type: intent.frequency !== "once" ? "scheduled" : "send",
+                    senderAddress: params.walletAddress,
+                    recipientAddress,
+                    recipientName: intent.recipientName || "Recipient",
+                    recipientCountry: intent.recipientCountry || "",
+                    sendAmount: parseFloat(intent.amount || "0"),
+                    sendCurrency: sourceCurrency,
+                    receiveAmount,
+                    receiveCurrency,
+                    exchangeRate: parseFloat(intent.amount || "0") > 0
+                        ? receiveAmount / parseFloat(intent.amount || "0")
+                        : route.path[0]?.rate || 0,
+                    networkFee: 0.001,
+                    swapFee: route.totalFeeUSD,
+                    txHash: params.txHash,
+                    blockNumber: params.blockNumber,
+                    gasUsed: params.gasUsed,
+                    status: "completed",
+                });
+            }
+            catch (error) {
+                console.error("[DB] Failed to record wallet-broadcast transaction:", error);
+            }
+        }
+        await (0, user_profile_1.recordSpending)(this.userId, parseFloat(intent.amount || "0"));
+        if (intent.frequency && intent.frequency !== "once") {
+            await (0, scheduler_1.createScheduledTransferPersistent)({
+                userId: this.userId,
+                recipientAddress,
+                recipientName: intent.recipientName || "Recipient",
+                recipientCountry: intent.recipientCountry || "",
+                amount: intent.amount || "0",
+                sourceCurrency: intent.sourceCurrency || "USD",
+                targetCurrency: intent.targetCurrency || "USD",
+                frequency: intent.frequency,
+                notifyRecipient: true,
+            });
+        }
+        this.pendingSendIntent = null;
+        this.pendingConfirmation = null;
+        this.pendingSwapConfirmation = null;
+        this.memory.clearLastIntent();
+        const countryName = COUNTRY_NAMES[intent.recipientCountry || ""]?.[lang] ||
+            intent.recipientCountry ||
+            "Unknown";
+        const successMsg = RESPONSES[lang]?.["transfer_success"]
+            ? RESPONSES[lang]["transfer_success"]
+                .replace("{txHash}", txRecord.blockchain.txHash || "N/A")
+                .replace("{blockNumber}", (txRecord.blockchain.blockNumber || 0).toString())
+                .replace("{gasUsed}", txRecord.blockchain.gasUsed || "0")
+                .replace("{amount}", intent.amount || "0")
+                .replace("{currency}", intent.sourceCurrency || "USD")
+                .replace("{recipientName}", intent.recipientName || "Recipient")
+                .replace("{recipientCountry}", countryName)
+            : "";
+        const response = {
+            message: successMsg + "\n\n" + (txRecord.receipt?.summary || ""),
+            type: "receipt",
+            data: txRecord,
+            suggestedActions: ["View history", "Send another", "Compare fees"],
+            language: lang,
+        };
+        this.memory.addMessage("agent", response.message);
+        await this.notifyTransferSuccess(intent, sourceCurrency, txRecord.blockchain.txHash);
+        return response;
     }
     getPendingWalletApprovalContext() {
         if (!this.pendingConfirmation)
@@ -1495,6 +1714,16 @@ class AgentOrchestrator {
                     executionSourceCurrency.trim().toLowerCase() !==
                         targetCurrency.trim().toLowerCase(),
             },
+        };
+    }
+    getPendingWalletAuthContext() {
+        if (!this.pendingWalletRequest)
+            return null;
+        return {
+            language: this.memory.getUserProfile().preferredLanguage ||
+                this.memory.getLastIntent()?.detectedLanguage ||
+                "en",
+            reason: this.pendingWalletRequestSource,
         };
     }
     getNotificationChannels() {

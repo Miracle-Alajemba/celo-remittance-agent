@@ -5,8 +5,20 @@
  */
 
 import * as dotenv from 'dotenv';
-import { AgentOrchestrator } from './orchestrator';
+import { AgentOrchestrator, AgentResponse } from './orchestrator';
 import { getCeloNetworkLabel } from '../celo/network-config';
+import {
+  createWalletApprovalSession,
+  completeWalletApprovalSession,
+  failWalletApprovalSession,
+  getWalletApprovalSession,
+} from './wallet-approval-session';
+import {
+  completeWalletAuthSession,
+  createWalletAuthSession,
+  failWalletAuthSession,
+  getWalletAuthSession,
+} from './wallet-auth-session';
 
 dotenv.config();
 
@@ -93,13 +105,13 @@ export class WhatsAppBotHandler {
       if (effectiveMessage.toLowerCase() === '/balance') {
         user.lastSuggestedActions = undefined;
         const response = await agent.processMessage('Check my balance');
-        return this.formatReply(response.message, response.suggestedActions, user);
+        return this.formatReply(response, user);
       }
 
       if (effectiveMessage.toLowerCase() === '/history') {
         user.lastSuggestedActions = undefined;
         const response = await agent.processMessage('Show my transaction history');
-        return this.formatReply(response.message, response.suggestedActions, user);
+        return this.formatReply(response, user);
       }
 
       if (effectiveMessage.toLowerCase() === '/start') {
@@ -115,11 +127,7 @@ export class WhatsAppBotHandler {
 
       // Process regular message through agent
       const response = await agent.processMessage(effectiveMessage);
-      const replyText = this.formatReply(
-        response.message,
-        response.suggestedActions,
-        user,
-      );
+      const replyText = this.formatReply(response, user);
 
       // Log message
       console.log(
@@ -252,6 +260,123 @@ Send your first remittance request!`;
     };
   }
 
+  private getPublicAppUrl(): string {
+    return (
+      process.env.PUBLIC_APP_URL ||
+      process.env.APP_URL ||
+      `http://localhost:${process.env.PORT || 3001}`
+    );
+  }
+
+  private getWhatsAppReturnUrl(phoneNumber: string): string {
+    const digits = phoneNumber.replace(/[^\d]/g, '');
+    return digits ? `https://wa.me/${digits}` : 'https://wa.me/';
+  }
+
+  private createWalletAuthUrl(phoneNumber: string): string | null {
+    const agent = this.getAgent(phoneNumber);
+    const authContext = agent?.getPendingWalletAuthContext();
+    if (!authContext) return null;
+
+    const session = createWalletAuthSession({
+      channel: 'whatsapp',
+      whatsappPhoneNumber: phoneNumber,
+      language: authContext.language,
+      reason: authContext.reason,
+    });
+
+    return `${this.getPublicAppUrl()}/connect?authSession=${encodeURIComponent(session.id)}`;
+  }
+
+  private createWalletApprovalUrl(phoneNumber: string): string | null {
+    const agent = this.getAgent(phoneNumber);
+    const approvalContext = agent?.getPendingWalletApprovalContext();
+    if (!approvalContext) return null;
+
+    const session = createWalletApprovalSession({
+      channel: 'whatsapp',
+      whatsappPhoneNumber: phoneNumber,
+      language: approvalContext.language,
+      requestedTransfer: approvalContext.requestedTransfer,
+      executionPlan: approvalContext.executionPlan,
+    });
+
+    return `${this.getPublicAppUrl()}/connect?session=${encodeURIComponent(session.id)}`;
+  }
+
+  async handleWalletAuth(sessionId: string, walletAddress: string) {
+    const session = getWalletAuthSession(sessionId);
+    if (!session || session.channel !== 'whatsapp' || !session.whatsappPhoneNumber) {
+      throw new Error('WhatsApp wallet sign-in session not found.');
+    }
+
+    const agent = this.getAgent(session.whatsappPhoneNumber);
+    if (!agent) {
+      throw new Error('WhatsApp session expired. Start again from WhatsApp.');
+    }
+
+    const response = await agent.completeWalletSignIn(walletAddress, session.reason);
+    if (response.type === 'error') {
+      failWalletAuthSession({
+        sessionId,
+        error: response.message,
+        receiptMessage: response.message,
+      });
+    } else {
+      completeWalletAuthSession({
+        sessionId,
+        receiptMessage: response.message,
+      });
+    }
+
+    return response;
+  }
+
+  async handleWalletExecutionCompletion(params: {
+    sessionId: string;
+    walletAddress: string;
+    txHash: string;
+    blockNumber?: number;
+    gasUsed?: string;
+    receiveAmount?: string;
+    receiveCurrency?: string;
+  }) {
+    const session = getWalletApprovalSession(params.sessionId);
+    if (!session || session.channel !== 'whatsapp' || !session.whatsappPhoneNumber) {
+      throw new Error('WhatsApp wallet approval session not found.');
+    }
+
+    const agent = this.getAgent(session.whatsappPhoneNumber);
+    if (!agent) {
+      throw new Error('WhatsApp session expired. Start again from WhatsApp.');
+    }
+
+    const response = await agent.finalizeWalletExecutedPendingTransfer({
+      walletAddress: params.walletAddress,
+      txHash: params.txHash,
+      blockNumber: params.blockNumber,
+      gasUsed: params.gasUsed,
+      receiveAmount: params.receiveAmount,
+      receiveCurrency: params.receiveCurrency,
+    });
+
+    if (response.type === 'receipt') {
+      completeWalletApprovalSession({
+        sessionId: params.sessionId,
+        txHash: params.txHash,
+        receiptMessage: response.message,
+      });
+    } else if (response.type === 'error') {
+      failWalletApprovalSession({
+        sessionId: params.sessionId,
+        error: response.message,
+        receiptMessage: response.message,
+      });
+    }
+
+    return response;
+  }
+
   private mapQuickActionSelection(
     message: string,
     suggestedActions?: string[],
@@ -272,21 +397,45 @@ Send your first remittance request!`;
   }
 
   private formatReply(
-    message: string,
-    suggestedActions: string[] | undefined,
+    response: AgentResponse,
     user: WhatsAppUser,
   ): string {
-    let replyText = message;
+    let replyText = response.message;
     user.lastSuggestedActions =
-      suggestedActions && suggestedActions.length > 0
-        ? [...suggestedActions]
+      response.suggestedActions && response.suggestedActions.length > 0
+        ? [...response.suggestedActions]
         : undefined;
 
-    if (suggestedActions && suggestedActions.length > 0) {
+    const walletAuthUrl =
+      response.type === 'wallet_auth'
+        ? this.createWalletAuthUrl(user.phoneNumber)
+        : null;
+    const walletApprovalUrl =
+      response.type === 'transfer_preview'
+        ? this.createWalletApprovalUrl(user.phoneNumber)
+        : null;
+
+    if (walletAuthUrl) {
+      replyText += `\n\n🔐 *Connect wallet securely:*\n${walletAuthUrl}`;
+    }
+
+    if (walletApprovalUrl) {
+      replyText += `\n\n🔐 *Approve this transfer:*\n${walletApprovalUrl}`;
+    }
+
+    if (response.suggestedActions && response.suggestedActions.length > 0) {
       replyText += '\n\n*Quick actions:*\n';
-      suggestedActions.forEach((action, i) => {
+      response.suggestedActions.forEach((action: string, i: number) => {
         replyText += `${i + 1}. ${action}\n`;
       });
+    }
+
+    const returnUrl =
+      walletAuthUrl || walletApprovalUrl
+        ? this.getWhatsAppReturnUrl(user.phoneNumber)
+        : null;
+    if (returnUrl) {
+      replyText += `\nReturn here after signing: ${returnUrl}`;
     }
 
     return replyText;

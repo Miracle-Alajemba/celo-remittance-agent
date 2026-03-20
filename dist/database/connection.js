@@ -7,6 +7,7 @@ exports.connectDB = connectDB;
 exports.disconnectDB = disconnectDB;
 exports.isDbConnected = isDbConnected;
 exports.getDbStatus = getDbStatus;
+const dns_1 = __importDefault(require("dns"));
 const mongoose_1 = __importDefault(require("mongoose"));
 const CONNECT_TIMEOUT_MS = 10000;
 const BASE_RETRY_MS = 5000;
@@ -17,12 +18,46 @@ let reconnectAttempt = 0;
 let listenersInitialized = false;
 let lastMongoError = null;
 let lastMongoEventAt = null;
+let dnsConfigured = false;
 function setMongoEvent(message) {
     lastMongoEventAt = new Date().toISOString();
     lastMongoError = message ?? null;
 }
 function getMongoUri() {
     return process.env.MONGODB_URI || process.env.MONGO_URI || process.env.MONGO_URL;
+}
+function getMongoDbName(uri) {
+    try {
+        const parsed = new URL(uri);
+        const dbName = parsed.pathname.replace(/^\//, "").trim();
+        return dbName || undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+function configureMongoDns() {
+    if (dnsConfigured)
+        return;
+    dnsConfigured = true;
+    const configured = process.env.MONGO_DNS_SERVERS ||
+        process.env.MONGODB_DNS_SERVERS ||
+        "1.1.1.1,8.8.8.8";
+    const servers = configured
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    if (servers.length === 0) {
+        return;
+    }
+    try {
+        dns_1.default.setServers(servers);
+        console.log(`🌐 MongoDB DNS servers set to ${servers.join(", ")}`);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`⚠️ Failed to set custom MongoDB DNS servers: ${message}`);
+    }
 }
 function clearReconnectTimer() {
     if (!reconnectTimer)
@@ -81,6 +116,7 @@ async function attemptMongoConnect(origin) {
     if (reconnectInFlight || mongoose_1.default.connection.readyState === 2) {
         return false;
     }
+    configureMongoDns();
     reconnectInFlight = true;
     reconnectAttempt += 1;
     const label = origin === "startup" ? "initial connection" : `${origin} reconnect attempt ${reconnectAttempt}`;
@@ -91,7 +127,7 @@ async function attemptMongoConnect(origin) {
             connectTimeoutMS: CONNECT_TIMEOUT_MS,
             socketTimeoutMS: CONNECT_TIMEOUT_MS,
             family: 4,
-            dbName: mongoose_1.default.connection.name || undefined,
+            dbName: getMongoDbName(mongoUri),
         });
         reconnectInFlight = false;
         reconnectAttempt = 0;

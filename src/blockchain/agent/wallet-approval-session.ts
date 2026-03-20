@@ -9,8 +9,9 @@ export type WalletApprovalSessionStatus =
 
 export interface WalletApprovalSession {
   id: string;
-  channel: "telegram";
-  telegramUserId: number;
+  channel: "telegram" | "whatsapp";
+  telegramUserId?: number;
+  whatsappPhoneNumber?: string;
   createdAt: string;
   expiresAt: string;
   status: WalletApprovalSessionStatus;
@@ -81,7 +82,9 @@ function cleanupExpiredSessions(): void {
 }
 
 export function createWalletApprovalSession(params: {
-  telegramUserId: number;
+  channel: "telegram" | "whatsapp";
+  telegramUserId?: number;
+  whatsappPhoneNumber?: string;
   language: string;
   requestedTransfer: WalletApprovalSession["requestedTransfer"];
   executionPlan: WalletApprovalSession["executionPlan"];
@@ -93,8 +96,9 @@ export function createWalletApprovalSession(params: {
 
   const session: WalletApprovalSession = {
     id,
-    channel: "telegram",
+    channel: params.channel,
     telegramUserId: params.telegramUserId,
+    whatsappPhoneNumber: params.whatsappPhoneNumber,
     createdAt,
     expiresAt,
     status: "pending",

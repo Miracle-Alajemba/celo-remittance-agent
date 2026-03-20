@@ -140,6 +140,10 @@ export class ConversationMemory {
     return this.memory.lastRemittanceIntent;
   }
 
+  clearLastIntent(): void {
+    delete this.memory.lastRemittanceIntent;
+  }
+
   setUserProfile(profile: Partial<UserProfile>): void {
     this.memory.userProfile = { ...this.memory.userProfile, ...profile };
   }

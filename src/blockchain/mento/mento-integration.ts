@@ -37,6 +37,34 @@ export interface SwapResult {
   error?: string;
 }
 
+export interface BrowserSwapExecutionPlan {
+  mode: "direct" | "routed";
+  tokenIn: {
+    symbol: string;
+    address: string;
+    decimals: number;
+  };
+  tokenOut: {
+    symbol: string;
+    address: string;
+    decimals: number;
+  };
+  spender: string;
+  amountIn: string;
+  minAmountOut: string;
+  quotedAmountOut: string;
+  directHop?: {
+    exchangeProvider: string;
+    exchangeId: string;
+  };
+  steps?: Array<{
+    exchangeProvider: string;
+    exchangeId: string;
+    assetIn: string;
+    assetOut: string;
+  }>;
+}
+
 const DEFAULT_SLIPPAGE = Number(process.env.MENTO_DEFAULT_SLIPPAGE || 0.005);
 const BROKER_SWAP_ABI = [
   "function swapIn(address exchangeProvider, bytes32 exchangeId, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin) returns (uint256 amountOut)",
@@ -415,6 +443,109 @@ export async function executeSwap(
       error: error.message,
     };
   }
+}
+
+export async function buildBrowserSwapExecutionPlan(
+  inputCurrency: string,
+  outputCurrency: string,
+  inputAmount: string,
+  maxSlippage: number = 0.01,
+): Promise<BrowserSwapExecutionPlan> {
+  const quote = await getSwapQuote(inputCurrency, outputCurrency, inputAmount);
+  const { tokenIn, tokenOut } = await resolvePair(inputCurrency, outputCurrency);
+  const mento = await getReadOnlyMento();
+  const tradablePairs = await mento.getTradablePairsWithPath({
+    cached: true,
+    returnAllRoutes: false,
+  });
+  const tradablePair =
+    tradablePairs.find((pair: any) => {
+      const addresses = pair.assets.map((asset: any) =>
+        asset.address.toLowerCase(),
+      );
+      return (
+        addresses.includes(tokenIn.address.toLowerCase()) &&
+        addresses.includes(tokenOut.address.toLowerCase())
+      );
+    }) || null;
+
+  const decimalsIn = await getTokenDecimals(tokenIn.address);
+  const decimalsOut = await getTokenDecimals(tokenOut.address);
+  const amountIn = utils.parseUnits(inputAmount, decimalsIn);
+  const expectedOut = utils.parseUnits(quote.outputAmount, decimalsOut);
+  const slippageBps = clampBps(maxSlippage * 10000);
+  const isRoutedSwap = Boolean(tradablePair && tradablePair.path?.length > 1);
+  const relaxedSlippageBps = isRoutedSwap
+    ? Math.max(
+        slippageBps,
+        clampBps(
+          Number(process.env.MENTO_ROUTED_MIN_SLIPPAGE_BPS || 2500),
+        ),
+      )
+    : slippageBps;
+  const minAmountOut = buildMinAmountOut(expectedOut, relaxedSlippageBps);
+
+  const spender =
+    !tradablePair || tradablePair.path?.length === 1
+      ? mento.broker?.target || mento.broker?.address
+      : mento.router?.target || mento.router?.address;
+
+  if (!spender) {
+    throw new Error("Unable to resolve Mento spender for swap approval.");
+  }
+
+  if (!tradablePair || tradablePair.path?.length === 1) {
+    const hop = tradablePair?.path?.[0];
+    if (!hop) {
+      throw new Error("Unable to resolve direct swap path.");
+    }
+
+    return {
+      mode: "direct",
+      tokenIn: {
+        symbol: tokenIn.symbol,
+        address: tokenIn.address,
+        decimals: decimalsIn,
+      },
+      tokenOut: {
+        symbol: tokenOut.symbol,
+        address: tokenOut.address,
+        decimals: decimalsOut,
+      },
+      spender,
+      amountIn: amountIn.toString(),
+      minAmountOut: minAmountOut.toString(),
+      quotedAmountOut: quote.outputAmount,
+      directHop: {
+        exchangeProvider: hop.providerAddr,
+        exchangeId: hop.id,
+      },
+    };
+  }
+
+  const steps = buildRoutedSteps(tokenIn.address, tokenOut.address, tradablePair);
+  if (steps.length === 0) {
+    throw new Error("Unable to resolve routed swap path.");
+  }
+
+  return {
+    mode: "routed",
+    tokenIn: {
+      symbol: tokenIn.symbol,
+      address: tokenIn.address,
+      decimals: decimalsIn,
+    },
+    tokenOut: {
+      symbol: tokenOut.symbol,
+      address: tokenOut.address,
+      decimals: decimalsOut,
+    },
+    spender,
+    amountIn: amountIn.toString(),
+    minAmountOut: minAmountOut.toString(),
+    quotedAmountOut: quote.outputAmount,
+    steps,
+  };
 }
 
 export async function estimateSwapFee(inputAmount: string): Promise<number> {
