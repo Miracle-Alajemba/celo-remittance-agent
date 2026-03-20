@@ -28,6 +28,7 @@ export class TelegramBotHandler {
   agents: Map<number, AgentOrchestrator> = new Map();
   users: Map<number, TelegramUser> = new Map();
   private readonly telegramAgent: https.Agent;
+  private started = false;
 
   constructor() {
     if (!TELEGRAM_BOT_TOKEN) {
@@ -50,8 +51,19 @@ export class TelegramBotHandler {
    * Setup Telegram command and message handlers
    */
   private setupHandlers() {
+    const withRecovery = (
+      handler: (ctx: Context) => Promise<void>,
+    ) => async (ctx: Context) => {
+      try {
+        await handler(ctx);
+      } catch (error: any) {
+        console.error('[Telegram Handler Error]', error);
+        await ctx.reply(`⚠️ Something went wrong. Please try again.`).catch(() => {});
+      }
+    };
+
     // 1. /start command
-    this.bot.command('start', async (ctx: Context) => {
+    this.bot.command('start', withRecovery(async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
       agent.clearMemory();
@@ -59,101 +71,93 @@ export class TelegramBotHandler {
       // Trigger the greeting flow in the Orchestrator
       const response = await agent.processMessage('hello');
       await this.sendResponse(ctx, response);
-    });
+    }));
 
     // 2. /help command
-    this.bot.command('help', async (ctx: Context) => {
+    this.bot.command('help', withRecovery(async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
       agent.clearPendingTransferFlow();
 
       const response = await agent.processMessage('help');
       await this.sendResponse(ctx, response);
-    });
+    }));
 
     // 3. /balance command
-    this.bot.command('balance', async (ctx: Context) => {
+    this.bot.command('balance', withRecovery(async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
       agent.clearPendingTransferFlow();
 
       const response = await agent.processMessage('Check my balance');
       await this.sendResponse(ctx, response);
-    });
+    }));
 
     // 4. /history command
-    this.bot.command('history', async (ctx: Context) => {
+    this.bot.command('history', withRecovery(async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
       agent.clearPendingTransferFlow();
 
       const response = await agent.processMessage('Show my transaction history');
       await this.sendResponse(ctx, response);
-    });
+    }));
 
     // 5. /wallet command
-    this.bot.command('wallet', async (ctx: Context) => {
+    this.bot.command('wallet', withRecovery(async (ctx: Context) => {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
       agent.clearPendingTransferFlow();
 
       const response = await agent.processMessage('wallet');
       await this.sendResponse(ctx, response);
-    });
+    }));
 
     // 5. Handle Text Messages (Natural Language)
-    this.bot.on('text', async (ctx: Context) => {
+    this.bot.on('text', withRecovery(async (ctx: Context) => {
       const userId = ctx.from!.id;
       // @ts-ignore - Telegraf types sometimes miss 'text' on message
       const userMessage = ctx.message.text;
 
       if (!userMessage) return;
+      if (userMessage.trim().startsWith('/')) return;
 
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(userId);
 
-      try {
-        await ctx.sendChatAction('typing');
+      await ctx.sendChatAction('typing');
 
-        // Process message through agent
-        const response = await agent.processMessage(userMessage);
+      // Process message through agent
+      const response = await agent.processMessage(userMessage);
 
-        // Send formatted response
-        await this.sendResponse(ctx, response);
+      // Send formatted response
+      await this.sendResponse(ctx, response);
 
-        console.log(`[Telegram] ${user.firstName}: ${userMessage}`);
-      } catch (error: any) {
-        console.error('[Telegram Error]', error);
-        await ctx.reply(`❌ Error: ${error.message}`);
-      }
-    });
+      console.log(`[Telegram] ${user.firstName}: ${userMessage}`);
+    }));
 
     // 6. Handle Button Clicks (Callbacks)
     // This handles when a user clicks "✅ Confirm" or "❌ Cancel"
-    this.bot.on('callback_query', async (ctx) => {
+    this.bot.on('callback_query', withRecovery(async (ctx) => {
         const userId = ctx.from!.id;
         // @ts-ignore
         const actionData = ctx.callbackQuery.data; // e.g., "Confirm"
 
         // Remove the loading clock on the button
-      await ctx.answerCbQuery();
+      await ctx.answerCbQuery().catch(() => {});
 
         const user = this.registerUser(ctx);
         const agent = this.getOrCreateAgent(userId);
 
-        try {
-            await ctx.sendChatAction('typing');
+        if (!actionData) return;
+        await ctx.sendChatAction('typing');
 
-            // Feed the button click back into the AI as if the user typed it
-            const response = await agent.processMessage(actionData);
+        // Feed the button click back into the AI as if the user typed it
+        const response = await agent.processMessage(actionData);
 
-            await this.sendResponse(ctx, response);
-            console.log(`[Telegram] ${user.firstName} clicked: ${actionData}`);
-        } catch (error: any) {
-            console.error('[Telegram Error]', error);
-            await ctx.reply(`❌ Error processing action.`);
-        }
-    });
+        await this.sendResponse(ctx, response);
+        console.log(`[Telegram] ${user.firstName} clicked: ${actionData}`);
+    }));
 
     // Error handling
     this.bot.catch((err: any, ctx: Context) => {
@@ -244,6 +248,9 @@ export class TelegramBotHandler {
    */
   async start() {
     try {
+      if (this.started) {
+        return true;
+      }
       const botInfo = await this.bot.telegram.getMe();
       console.log(`
 ✅ Telegram Bot Started
@@ -252,7 +259,8 @@ export class TelegramBotHandler {
 ────────────────────────────────────────
       `);
 
-      this.bot.launch();
+      await this.bot.launch({ dropPendingUpdates: true });
+      this.started = true;
 
       // Graceful shutdown
       process.once('SIGINT', () => this.bot.stop('SIGINT'));

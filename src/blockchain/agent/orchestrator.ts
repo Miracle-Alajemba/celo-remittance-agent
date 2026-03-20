@@ -474,13 +474,35 @@ export class AgentOrchestrator {
       return this.createResponse(onboardingMsg, "text", lang);
     }
 
+    const earlyIntent = parseRemittanceIntent(userMessage);
+    const normalizedEarlyAction = earlyIntent.action;
+    const isSlashCommand = userMessage.trim().startsWith("/");
+    const startsNewFlow =
+      isSlashCommand ||
+      normalizedEarlyAction === "send" ||
+      normalizedEarlyAction === "swap" ||
+      normalizedEarlyAction === "compare_fees" ||
+      normalizedEarlyAction === "check_balance" ||
+      normalizedEarlyAction === "wallet" ||
+      normalizedEarlyAction === "history" ||
+      normalizedEarlyAction === "schedule" ||
+      normalizedEarlyAction === "help";
+
     // Check for confirmation of pending transfer
     if (this.pendingConfirmation) {
+      if (startsNewFlow) {
+        this.pendingConfirmation = null;
+      } else {
       return await this.handleConfirmation(userMessage);
+      }
     }
 
     if (this.pendingSwapConfirmation) {
+      if (startsNewFlow) {
+        this.pendingSwapConfirmation = null;
+      } else {
       return await this.handleSwapConfirmation(userMessage);
+      }
     }
 
     const orphanConfirmWords = [
@@ -518,7 +540,7 @@ export class AgentOrchestrator {
     }
 
     // Parse intent (keyword-based as fallback)
-    let intent = parseRemittanceIntent(userMessage);
+    let intent = earlyIntent;
     let lang = intent.detectedLanguage;
 
     if (preferredLang) {
@@ -1605,6 +1627,9 @@ export class AgentOrchestrator {
     this.memory.setUserProfile({ walletAddress: address });
     this.pendingWalletRequest = false;
     this.pendingWalletRequestSource = "onboarding";
+    this.pendingSendIntent = null;
+    this.pendingConfirmation = null;
+    this.pendingSwapConfirmation = null;
 
     const isReturningWallet = Boolean(
       existingWalletOwner && existingWalletOwner.userId === this.userId,
