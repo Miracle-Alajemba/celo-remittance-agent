@@ -128,6 +128,17 @@ function getSessionReturnMeta(session) {
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
 app.use(express_1.default.urlencoded({ extended: false }));
+app.use((req, res, next) => {
+    if (req.path === "/connect" ||
+        req.path.endsWith("/sign-transfer.js") ||
+        req.path.endsWith("/sign-transfer.css") ||
+        req.path.endsWith("/sign-transfer.html")) {
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
+    }
+    next();
+});
 app.use(express_1.default.static(path_1.default.join(__dirname, "../public")));
 const apiLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 1000,
@@ -570,8 +581,11 @@ app.get("/api/wallet-approval/session/:sessionId/execution", async (req, res) =>
         const executionCurrency = normalizeWalletExecutionCurrency(session.executionPlan.executionSourceCurrency);
         const targetCurrency = normalizeWalletExecutionCurrency(session.executionPlan.targetCurrency);
         let swapPlan = null;
+        let fallbackSwapPlan = null;
         if (session.executionPlan.requiresSwap) {
-            swapPlan = await (0, mento_integration_1.buildBrowserSwapExecutionPlan)(executionCurrency, targetCurrency, session.executionPlan.executionSourceAmount, Number(process.env.MENTO_MAX_SLIPPAGE || 0.01));
+            const browserSwapPlans = await (0, mento_integration_1.buildBrowserSwapExecutionPlan)(executionCurrency, targetCurrency, session.executionPlan.executionSourceAmount, Number(process.env.MENTO_MAX_SLIPPAGE || 0.01));
+            swapPlan = browserSwapPlans.swapPlan;
+            fallbackSwapPlan = browserSwapPlans.fallbackSwapPlan || null;
         }
         return res.json({
             sessionId: session.id,
@@ -584,6 +598,7 @@ app.get("/api/wallet-approval/session/:sessionId/execution", async (req, res) =>
             estimatedReceiveAmount: session.executionPlan.estimatedReceiveAmount,
             requiresSwap: session.executionPlan.requiresSwap,
             swapPlan,
+            fallbackSwapPlan,
             stablecoinAddresses: (0, network_config_1.getStablecoinAddresses)(),
         });
     }
@@ -681,6 +696,25 @@ app.post("/api/wallet-approval/session/:sessionId/complete", async (req, res) =>
             blockNumber: receipt.blockNumber,
             botResponse: response.message,
             ...getSessionReturnMeta(session),
+        });
+    }
+    catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+app.post("/api/wallet-swap/plan", async (req, res) => {
+    try {
+        const { inputCurrency, outputCurrency, inputAmount } = req.body || {};
+        if (!inputCurrency || !outputCurrency || !inputAmount) {
+            return res.status(400).json({
+                error: "inputCurrency, outputCurrency, and inputAmount are required",
+            });
+        }
+        const browserSwapPlans = await (0, mento_integration_1.buildBrowserSwapExecutionPlan)(String(inputCurrency), String(outputCurrency), String(inputAmount), Number(process.env.MENTO_MAX_SLIPPAGE || 0.01));
+        return res.json({
+            swapPlan: browserSwapPlans.swapPlan,
+            fallbackSwapPlan: browserSwapPlans.fallbackSwapPlan || null,
+            stablecoinAddresses: (0, network_config_1.getStablecoinAddresses)(),
         });
     }
     catch (error) {

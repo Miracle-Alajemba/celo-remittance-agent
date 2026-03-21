@@ -1,135 +1,187 @@
-# Remittance Intent Agent
+# CeloRemit
 
-Remittance Intent Agent is an AI-powered cross-border transfer assistant built on Celo. It lets users send money with natural language commands like:
+CeloRemit is an AI remittance agent built on Celo. It lets users describe cross-border transfers in natural language through chat interfaces like Telegram and WhatsApp, then routes value through Celo stable assets and Mento, asks the user to sign with their wallet, and completes the transfer on-chain.
 
-- "Send $50 to my mom in the Philippines"
-- "Transfer 100 euros to my brother in Nigeria every month"
-- "Compare fees for sending $200 to Kenya"
+Example prompts:
 
-The agent understands multilingual remittance requests, finds an efficient route across Celo stablecoins and Mento pools, previews fees and exchange rates, and can execute or schedule transfers.
-
-## Why It Matters
-
-Traditional remittances are often expensive, slow, and hard to navigate. Users regularly deal with:
-
-- high fees
-- hidden FX spreads
-- slow delivery
-- poor cross-border user experience
-
-This project reimagines remittances as a conversational experience powered by Celo stablecoins.
+- `Send $50 to my mom in the Philippines`
+- `Transfer 100 euros to my brother in Nigeria every month`
+- `Compare fees for sending $200 to Kenya`
+- `Swap 10 cUSD to cEUR`
 
 ## What It Does
 
-- Parses remittance intents in English, Spanish, Portuguese, and French
-- Routes transfers across supported Celo stablecoin corridors
-- Uses Mento for swap quotes and conversion paths
-- Compares fees against traditional providers using live provider data where available
-- Supports recurring transfers and recipient notifications
-- Tracks transaction history and spending limits
-- Exposes an API and chat-based agent flows for demos
+- Parses remittance intents from natural language
+- Supports English, Spanish, Portuguese, and French
+- Shows transfer previews with rate, receive estimate, fee, and frequency
+- Routes across Celo stable assets and Mento swap paths
+- Supports recurring transfers, schedule listing, and cancellation
+- Tracks receipts, history, and spending limits
+- Uses wallet sign-in and wallet approval for user-controlled execution
+- Supports Telegram and WhatsApp chat flows
+
+## Proven Live Flows
+
+The project has already been validated on Celo Mainnet with live transaction execution.
+
+Proven corridors:
+
+- `USD -> PHP`
+- `EUR -> NGN`
+- `GBP -> KES`
+
+Example live transaction proofs:
+
+- `USD -> PHP`: `0x44154d3acbfe28865e2f4c13672bb2357b1676d2b96509dc0bd2899650a6665b`
+- `EUR -> NGN`: `0x791a936ca6fe86358a0fa793b27de66890a2e1079edb15549171f3b1425974b4`
+- `GBP -> KES`: `0xa688b727b6299bd7d98738b35404a931dc88ed3e565afa2b293a3ca35ed468ba`
+
+The user-signed Telegram flow has also been validated end to end, including wallet sign-in, wallet-approved transfer execution, recurring schedules, schedule listing, and cancellation.
+
+## How It Works
+
+1. A user sends a remittance request in natural language.
+2. The agent extracts amount, source currency, destination corridor, recipient, and frequency.
+3. The app calculates a low-cost route using Celo stable assets and Mento pricing data.
+4. The user receives a preview with rate, estimated delivery, fee, and transfer frequency.
+5. The user opens a secure wallet link and signs in or approves the transfer.
+6. The transfer executes on Celo Mainnet.
+7. The chat interface returns the final receipt and transaction hash.
+
+## Product Architecture
+
+- `Telegram / WhatsApp`: conversational interface
+- `Agent orchestrator`: intent parsing, route selection, fee comparison, scheduling, receipts, and user flow
+- `Wallet connect page`: secure wallet sign-in and transfer approval
+- `Mento`: swap and route execution
+- `MongoDB`: persistence for users, history, receipts, and schedules
 
 ## Core Features
 
 - Natural language remittance intent parsing
-- Multi-language support for a global user base
-- Fee comparison against traditional remittance providers with live quotes plus fallback estimates
-- Route optimization across supported corridors
+- Multi-language support
+- Multi-corridor remittance support
+- Fee comparison against traditional remittance providers
 - Recurring transfer scheduling
-- SMS and WhatsApp notifications
-- Transaction receipts and history
-- Spending controls for safer transfers
+- Transaction history and receipts
+- Spending limits
+- Wallet sign-in and wallet-approved execution
 
 ## Integrations
 
-- Celo stablecoins
+- Celo Mainnet
+- Celo stable assets
 - Mento Protocol
-- OpenClaw-ready agent adapter
-- Anthropic for LLM-assisted intent understanding
+- Telegram Bot API
 - Twilio / WhatsApp
-- Telegram bot interface
-- MongoDB for persistence
+- MongoDB
+- Reown / WalletConnect
+- Anthropic SDK
 
-## Stack
+## Tech Stack
 
 - TypeScript
 - Node.js
 - Express
-- MongoDB / Mongoose
 - Ethers
 - Telegraf
 - Twilio
+- MongoDB / Mongoose
 
-## Demo Flow
+## Demo Notes
 
-1. A user types: "Send $50 to my mom in the Philippines"
-2. The agent extracts the amount, recipient corridor, and currency intent
-3. The system shows a route, FX estimate, fee preview, and savings comparison
-4. The user confirms the transfer
-5. The backend executes the swap and/or transfer on Celo
-6. The recipient can receive an SMS or WhatsApp notification
-7. The transaction is saved to history
+Strongest live demo path:
 
-## Example Prompts
+- Telegram sign-in
+- balance check
+- transfer preview
+- wallet approval
+- on-chain receipt
+- recurring transfer creation
+- `Show schedules`
+- `Cancel schedule`
 
-- "Send $50 to my mom in the Philippines"
-- "Transfer 100 euros to my brother in Nigeria every month"
-- "Compare fees for sending $200 to Kenya"
-- "Swap 10 cUSD to cEUR"
-- "Show my transaction history"
-- "Check my balance"
-
-## Hackathon Note
-
-This is a hackathon prototype built to demonstrate the end-to-end remittance experience. Some integrations use fallback or estimated logic when production credentials or third-party live data are unavailable.
+WhatsApp support is integrated and wallet sign-in works. Some live wallet-signed swap corridors may still depend on current on-chain pricing availability, so Telegram is the strongest primary demo path.
 
 ## Setup
 
-1. Install dependencies:
+1. Install dependencies
 
 ```bash
 npm install
 ```
 
-2. Configure environment variables in `.env`.
+2. Create a `.env` file
 
-At minimum, the backend expects blockchain configuration such as:
+Common variables used by this project include:
 
-- `PRIVATE_KEY`
-- `ALFAJORES_RPC`
-
-Optional integrations include:
-
+- `PORT`
+- `PUBLIC_APP_URL`
 - `MONGODB_URI`
-- `ANTHROPIC_API_KEY`
-- `WISE_API_URL`
+- `TELEGRAM_BOT_TOKEN`
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_PHONE_NUMBER`
 - `TWILIO_WHATSAPP_NUMBER`
-- `TELEGRAM_BOT_TOKEN`
+- `ANTHROPIC_API_KEY`
+- `PRIVATE_KEY`
+- `REOWN_PROJECT_ID`
 
-3. Start the development server:
+Notes:
+
+- wallet sign-in uses `PUBLIC_APP_URL` for Telegram and WhatsApp handoff links
+- MongoDB is recommended for persistent schedules and transaction history
+- some development and fallback flows can still run without every optional integration configured
+
+3. Start the development server
 
 ```bash
 npm run dev
 ```
 
-4. Build for production:
+4. Build for production
 
 ```bash
 npm run build
 ```
 
+5. Start the compiled server
+
+```bash
+npm run start
+```
+
 ## Scripts
 
 - `npm run dev` - start the backend with `nodemon`
-- `npm run build` - compile TypeScript to `dist`
+- `npm run build` - compile TypeScript
 - `npm run start` - run the compiled server
-- `npm run test:send-celo` - run the transfer test script
-- `npm run test:swap-send` - run the swap + send flow script
-- `npm run test:database` - run the database test script
+- `npm run test:send-celo` - test direct CELO transfer flow
+- `npm run test:swap-send` - test swap and send flow
+- `npm run test:database` - test database connectivity
 
-## Project Goal
+## Example Prompts
 
-The goal of this project is to make remittances feel as simple as sending a message. Instead of navigating forms, fees, and exchange rails manually, users can express what they want in natural language and let the agent handle the rest.
+- `Send $50 to my mom in the Philippines`
+- `Transfer 100 euros to my brother in Nigeria every month`
+- `Compare fees for sending $200 to Kenya`
+- `Swap 10 cUSD to cEUR`
+- `Check balance`
+- `Show history`
+- `Show schedules`
+- `Cancel schedule`
+
+## Security Model
+
+CeloRemit is designed so the agent handles the remittance intelligence and orchestration, while the user signs with their own wallet for authorization. This keeps the chat experience simple while improving trust minimization and user control.
+
+## Hackathon Context
+
+This project was built as a practical AI remittance agent for Celo-focused hackathon judging criteria around:
+
+- technical integration quality
+- real-world applicability
+- security and trust minimization
+- developer experience
+
+The goal is to make remittances feel as simple as sending a message, while keeping execution on-chain and verifiable.

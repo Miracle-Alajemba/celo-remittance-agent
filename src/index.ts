@@ -137,6 +137,19 @@ function getSessionReturnMeta(session: {
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use((req, res, next) => {
+  if (
+    req.path === "/connect" ||
+    req.path.endsWith("/sign-transfer.js") ||
+    req.path.endsWith("/sign-transfer.css") ||
+    req.path.endsWith("/sign-transfer.html")
+  ) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, "../public")));
 
 const apiLimiter = rateLimit({
@@ -697,13 +710,16 @@ app.get(
       );
 
       let swapPlan = null;
+      let fallbackSwapPlan = null;
       if (session.executionPlan.requiresSwap) {
-        swapPlan = await buildBrowserSwapExecutionPlan(
+        const browserSwapPlans = await buildBrowserSwapExecutionPlan(
           executionCurrency,
           targetCurrency,
           session.executionPlan.executionSourceAmount,
           Number(process.env.MENTO_MAX_SLIPPAGE || 0.01),
         );
+        swapPlan = browserSwapPlans.swapPlan;
+        fallbackSwapPlan = browserSwapPlans.fallbackSwapPlan || null;
       }
 
       return res.json({
@@ -717,6 +733,7 @@ app.get(
         estimatedReceiveAmount: session.executionPlan.estimatedReceiveAmount,
         requiresSwap: session.executionPlan.requiresSwap,
         swapPlan,
+        fallbackSwapPlan,
         stablecoinAddresses: getStablecoinAddresses(),
       });
     } catch (error: any) {
@@ -837,6 +854,35 @@ app.post(
         blockNumber: receipt.blockNumber,
         botResponse: response.message,
         ...getSessionReturnMeta(session),
+      });
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  },
+);
+
+app.post(
+  "/api/wallet-swap/plan",
+  async (req: express.Request, res: express.Response) => {
+    try {
+      const { inputCurrency, outputCurrency, inputAmount } = req.body || {};
+      if (!inputCurrency || !outputCurrency || !inputAmount) {
+        return res.status(400).json({
+          error: "inputCurrency, outputCurrency, and inputAmount are required",
+        });
+      }
+
+      const browserSwapPlans = await buildBrowserSwapExecutionPlan(
+        String(inputCurrency),
+        String(outputCurrency),
+        String(inputAmount),
+        Number(process.env.MENTO_MAX_SLIPPAGE || 0.01),
+      );
+
+      return res.json({
+        swapPlan: browserSwapPlans.swapPlan,
+        fallbackSwapPlan: browserSwapPlans.fallbackSwapPlan || null,
+        stablecoinAddresses: getStablecoinAddresses(),
       });
     } catch (error: any) {
       return res.status(400).json({ error: error.message });

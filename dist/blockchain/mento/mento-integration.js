@@ -48,6 +48,78 @@ const ethersV6 = __importStar(require("ethers"));
 const ethers5_1 = require("ethers5");
 const rates_1 = require("../market/rates");
 const mento_client_1 = require("./mento-client");
+function getPairHopCount(tradablePair) {
+    return tradablePair?.path?.length || 0;
+}
+function pairMatchesAssets(tradablePair, tokenInAddress, tokenOutAddress) {
+    const addresses = (tradablePair?.assets || []).map((asset) => String(asset.address || asset).toLowerCase());
+    return (addresses.includes(tokenInAddress.toLowerCase()) &&
+        addresses.includes(tokenOutAddress.toLowerCase()));
+}
+function buildPlanFromTradablePair(params) {
+    const { tokenIn, tokenOut, decimalsIn, decimalsOut, amountIn, quote, tradablePair, mento, slippageBps, } = params;
+    const expectedOut = ethers5_1.utils.parseUnits(quote.outputAmount, decimalsOut);
+    const isRoutedSwap = Boolean(tradablePair && tradablePair.path?.length > 1);
+    const relaxedSlippageBps = isRoutedSwap
+        ? Math.max(slippageBps, clampBps(Number(process.env.MENTO_ROUTED_MIN_SLIPPAGE_BPS || 2500)))
+        : slippageBps;
+    const minAmountOut = buildMinAmountOut(expectedOut, relaxedSlippageBps);
+    const spender = !tradablePair || tradablePair.path?.length === 1
+        ? mento.broker?.target || mento.broker?.address
+        : mento.router?.target || mento.router?.address;
+    if (!spender) {
+        throw new Error("Unable to resolve Mento spender for swap approval.");
+    }
+    if (!tradablePair || tradablePair.path?.length === 1) {
+        const hop = tradablePair?.path?.[0];
+        if (!hop) {
+            throw new Error("Unable to resolve direct swap path.");
+        }
+        return {
+            mode: "direct",
+            tokenIn: {
+                symbol: tokenIn.symbol,
+                address: tokenIn.address,
+                decimals: decimalsIn,
+            },
+            tokenOut: {
+                symbol: tokenOut.symbol,
+                address: tokenOut.address,
+                decimals: decimalsOut,
+            },
+            spender,
+            amountIn: amountIn.toString(),
+            minAmountOut: minAmountOut.toString(),
+            quotedAmountOut: quote.outputAmount,
+            directHop: {
+                exchangeProvider: hop.providerAddr,
+                exchangeId: hop.id,
+            },
+        };
+    }
+    const steps = buildRoutedSteps(tokenIn.address, tokenOut.address, tradablePair);
+    if (steps.length === 0) {
+        throw new Error("Unable to resolve routed swap path.");
+    }
+    return {
+        mode: "routed",
+        tokenIn: {
+            symbol: tokenIn.symbol,
+            address: tokenIn.address,
+            decimals: decimalsIn,
+        },
+        tokenOut: {
+            symbol: tokenOut.symbol,
+            address: tokenOut.address,
+            decimals: decimalsOut,
+        },
+        spender,
+        amountIn: amountIn.toString(),
+        minAmountOut: minAmountOut.toString(),
+        quotedAmountOut: quote.outputAmount,
+        steps,
+    };
+}
 const DEFAULT_SLIPPAGE = Number(process.env.MENTO_DEFAULT_SLIPPAGE || 0.005);
 const BROKER_SWAP_ABI = [
     "function swapIn(address exchangeProvider, bytes32 exchangeId, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin) returns (uint256 amountOut)",
@@ -306,77 +378,49 @@ async function buildBrowserSwapExecutionPlan(inputCurrency, outputCurrency, inpu
     const mento = await (0, mento_client_1.getReadOnlyMento)();
     const tradablePairs = await mento.getTradablePairsWithPath({
         cached: true,
-        returnAllRoutes: false,
+        returnAllRoutes: true,
     });
-    const tradablePair = tradablePairs.find((pair) => {
-        const addresses = pair.assets.map((asset) => asset.address.toLowerCase());
-        return (addresses.includes(tokenIn.address.toLowerCase()) &&
-            addresses.includes(tokenOut.address.toLowerCase()));
-    }) || null;
+    const matchingPairs = tradablePairs.filter((pair) => pairMatchesAssets(pair, tokenIn.address, tokenOut.address));
+    const directPair = matchingPairs.find((pair) => getPairHopCount(pair) <= 1) || null;
+    const routedPairs = matchingPairs
+        .filter((pair) => getPairHopCount(pair) > 1)
+        .sort((a, b) => getPairHopCount(a) - getPairHopCount(b));
+    const quoteIsFallback = /fx fallback/i.test(quote.route || "");
+    const primaryPair = quoteIsFallback
+        ? routedPairs[0] || directPair
+        : directPair || routedPairs[0] || null;
+    const fallbackPair = primaryPair === directPair ? routedPairs[0] || null : directPair;
     const decimalsIn = await (0, mento_client_1.getTokenDecimals)(tokenIn.address);
     const decimalsOut = await (0, mento_client_1.getTokenDecimals)(tokenOut.address);
     const amountIn = ethers5_1.utils.parseUnits(inputAmount, decimalsIn);
-    const expectedOut = ethers5_1.utils.parseUnits(quote.outputAmount, decimalsOut);
     const slippageBps = clampBps(maxSlippage * 10000);
-    const isRoutedSwap = Boolean(tradablePair && tradablePair.path?.length > 1);
-    const relaxedSlippageBps = isRoutedSwap
-        ? Math.max(slippageBps, clampBps(Number(process.env.MENTO_ROUTED_MIN_SLIPPAGE_BPS || 2500)))
-        : slippageBps;
-    const minAmountOut = buildMinAmountOut(expectedOut, relaxedSlippageBps);
-    const spender = !tradablePair || tradablePair.path?.length === 1
-        ? mento.broker?.target || mento.broker?.address
-        : mento.router?.target || mento.router?.address;
-    if (!spender) {
-        throw new Error("Unable to resolve Mento spender for swap approval.");
-    }
-    if (!tradablePair || tradablePair.path?.length === 1) {
-        const hop = tradablePair?.path?.[0];
-        if (!hop) {
-            throw new Error("Unable to resolve direct swap path.");
-        }
-        return {
-            mode: "direct",
-            tokenIn: {
-                symbol: tokenIn.symbol,
-                address: tokenIn.address,
-                decimals: decimalsIn,
-            },
-            tokenOut: {
-                symbol: tokenOut.symbol,
-                address: tokenOut.address,
-                decimals: decimalsOut,
-            },
-            spender,
-            amountIn: amountIn.toString(),
-            minAmountOut: minAmountOut.toString(),
-            quotedAmountOut: quote.outputAmount,
-            directHop: {
-                exchangeProvider: hop.providerAddr,
-                exchangeId: hop.id,
-            },
-        };
-    }
-    const steps = buildRoutedSteps(tokenIn.address, tokenOut.address, tradablePair);
-    if (steps.length === 0) {
-        throw new Error("Unable to resolve routed swap path.");
-    }
+    const swapPlan = buildPlanFromTradablePair({
+        tokenIn,
+        tokenOut,
+        decimalsIn,
+        decimalsOut,
+        amountIn,
+        quote,
+        tradablePair: primaryPair,
+        mento,
+        slippageBps,
+    });
+    const fallbackSwapPlan = fallbackPair && fallbackPair !== primaryPair
+        ? buildPlanFromTradablePair({
+            tokenIn,
+            tokenOut,
+            decimalsIn,
+            decimalsOut,
+            amountIn,
+            quote,
+            tradablePair: fallbackPair,
+            mento,
+            slippageBps,
+        })
+        : undefined;
     return {
-        mode: "routed",
-        tokenIn: {
-            symbol: tokenIn.symbol,
-            address: tokenIn.address,
-            decimals: decimalsIn,
-        },
-        tokenOut: {
-            symbol: tokenOut.symbol,
-            address: tokenOut.address,
-            decimals: decimalsOut,
-        },
-        spender,
-        amountIn: amountIn.toString(),
-        minAmountOut: minAmountOut.toString(),
-        quotedAmountOut: quote.outputAmount,
-        steps,
+        swapPlan,
+        fallbackSwapPlan,
     };
 }
 async function estimateSwapFee(inputAmount) {

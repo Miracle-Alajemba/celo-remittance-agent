@@ -90,7 +90,7 @@ function applyApprovalModeUi() {
   pageEyebrow.textContent = "Transfer approval";
   pageTitle.textContent = "Send This Transfer";
   pageLead.textContent =
-    "Review the summary, connect your wallet, and send it securely. Telegram will send the final update.";
+    "Review the summary, connect your wallet, and send it securely. Your chat will receive the final update.";
 }
 
 function updatePrimaryActionButton() {
@@ -218,6 +218,62 @@ async function ensureTokenAllowance(tokenAddress, spender, amount) {
   await approvalTx.wait();
 }
 
+function canUseEurBridgeFallback(sourceCurrency, targetCurrency) {
+  const source = normalizeCurrencySymbol(sourceCurrency)?.toUpperCase?.();
+  const target = normalizeCurrencySymbol(targetCurrency)?.toUpperCase?.();
+  return (
+    (source === "CUSD" || source === "USDM" || source === "USD") &&
+    (target === "NGNM" || target === "NGN")
+  );
+}
+
+function shouldPreferEurBridge(sourceCurrency, targetCurrency) {
+  return canUseEurBridgeFallback(sourceCurrency, targetCurrency);
+}
+
+function isMedianError(error) {
+  const message =
+    error?.reason || error?.shortMessage || error?.message || String(error);
+  return /no valid median/i.test(message);
+}
+
+function formatExecutionError(error) {
+  if (isMedianError(error)) {
+    const targetCountry =
+      approvalSession?.requestedTransfer?.recipientCountry?.toUpperCase?.() || "";
+    const sourceCurrency =
+      approvalSession?.requestedTransfer?.sourceCurrency?.toUpperCase?.() || "";
+
+    if (targetCountry === "NG" || targetCountry === "NIGERIA") {
+      return sourceCurrency === "USD" || sourceCurrency === "CUSD"
+        ? "This Nigeria route is temporarily unavailable for wallet-signed USD transfers right now because live on-chain pricing is unavailable. Your balance is fine. Try EUR -> NGN, another corridor, or retry later."
+        : "This Nigeria route is temporarily unavailable right now because live on-chain pricing is unavailable. Your balance is fine. Try another corridor or retry later.";
+    }
+
+    return "This swap route is temporarily unavailable right now because live on-chain pricing is unavailable. Your balance is fine. Try another corridor or retry later.";
+  }
+
+  return error?.reason || error?.shortMessage || error?.message || "Action failed.";
+}
+
+async function fetchDynamicSwapPlan(inputCurrency, outputCurrency, inputAmount) {
+  const { response, data } = await fetchJson("/api/wallet-swap/plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      inputCurrency,
+      outputCurrency,
+      inputAmount,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to build the swap plan.");
+  }
+
+  return data;
+}
+
 async function waitForConfirmedTransaction(txPromise, statusMessage) {
   if (statusMessage) {
     setStatus(statusMessage);
@@ -267,57 +323,170 @@ async function executeBrowserSwapAndTransfer(executionPayload) {
     throw new Error("Swap plan is missing from the Telegram session.");
   }
 
-  const tokenOutBefore = await getAssetBalance(
-    swapPlan.tokenOut.symbol,
-    senderAddress,
-    stablecoinAddresses,
-  );
-
-  await ensureTokenAllowance(
-    swapPlan.tokenIn.address,
-    swapPlan.spender,
-    BigInt(swapPlan.amountIn),
-  );
-
-  if (swapPlan.mode === "direct") {
-    const broker = new ethers.Contract(swapPlan.spender, BROKER_SWAP_ABI, signer);
-    await waitForConfirmedTransaction(
-      broker.swapIn(
-        swapPlan.directHop.exchangeProvider,
-        swapPlan.directHop.exchangeId,
-        swapPlan.tokenIn.address,
-        swapPlan.tokenOut.address,
-        BigInt(swapPlan.amountIn),
-        BigInt(swapPlan.minAmountOut),
-      ),
-      "Executing swap...",
+  const executeSwapPlanAndMeasure = async (plan, statusMessage = "Executing swap...") => {
+    const tokenOutBefore = await getAssetBalance(
+      plan.tokenOut.symbol,
+      senderAddress,
+      stablecoinAddresses,
     );
-  } else {
-    const router = new ethers.Contract(swapPlan.spender, ROUTER_SWAP_ABI, signer);
+
+    await ensureTokenAllowance(
+      plan.tokenIn.address,
+      plan.spender,
+      BigInt(plan.amountIn),
+    );
+
+    if (plan.mode === "direct") {
+      const broker = new ethers.Contract(plan.spender, BROKER_SWAP_ABI, signer);
+      await waitForConfirmedTransaction(
+        broker.swapIn(
+          plan.directHop.exchangeProvider,
+          plan.directHop.exchangeId,
+          plan.tokenIn.address,
+          plan.tokenOut.address,
+          BigInt(plan.amountIn),
+          BigInt(plan.minAmountOut),
+        ),
+        statusMessage,
+      );
+      const tokenOutAfter = await getAssetBalance(
+        plan.tokenOut.symbol,
+        senderAddress,
+        stablecoinAddresses,
+      );
+      const receivedAmountRaw = tokenOutAfter - tokenOutBefore;
+      if (receivedAmountRaw <= 0n) {
+        throw new Error("Swap completed, but no destination balance was detected for transfer.");
+      }
+      return {
+        receivedAmountRaw,
+        tokenOut: plan.tokenOut,
+      };
+    }
+
+    const router = new ethers.Contract(plan.spender, ROUTER_SWAP_ABI, signer);
     await waitForConfirmedTransaction(
       router.swapExactTokensForTokens(
-        BigInt(swapPlan.amountIn),
-        BigInt(swapPlan.minAmountOut),
-        swapPlan.steps,
+        BigInt(plan.amountIn),
+        BigInt(plan.minAmountOut),
+        plan.steps,
       ),
-      "Executing swap...",
+      statusMessage,
     );
-  }
+    const tokenOutAfter = await getAssetBalance(
+      plan.tokenOut.symbol,
+      senderAddress,
+      stablecoinAddresses,
+    );
+    const receivedAmountRaw = tokenOutAfter - tokenOutBefore;
+    if (receivedAmountRaw <= 0n) {
+      throw new Error("Swap completed, but no destination balance was detected for transfer.");
+    }
+    return {
+      receivedAmountRaw,
+      tokenOut: plan.tokenOut,
+    };
+  };
 
-  const tokenOutAfter = await getAssetBalance(
-    swapPlan.tokenOut.symbol,
-    senderAddress,
-    stablecoinAddresses,
-  );
-  const receivedAmountRaw = tokenOutAfter - tokenOutBefore;
+  const executePlanDataWithFallback = async (
+    planData,
+    primaryStatusMessage,
+    fallbackStatusMessage,
+  ) => {
+    try {
+      return await executeSwapPlanAndMeasure(
+        planData.swapPlan,
+        primaryStatusMessage,
+      );
+    } catch (error) {
+      if (!planData?.fallbackSwapPlan || !isMedianError(error)) {
+        throw error;
+      }
 
-  if (receivedAmountRaw <= 0n) {
-    throw new Error("Swap completed, but no destination balance was detected for transfer.");
+      return executeSwapPlanAndMeasure(
+        planData.fallbackSwapPlan,
+        fallbackStatusMessage,
+      );
+    }
+  };
+
+  const executeViaEurBridge = async () => {
+    setStatus("Routing through EUR bridge...");
+    const bridgePlanData = await fetchDynamicSwapPlan(
+      sourceCurrency,
+      "cEUR",
+      executionPayload.executionSourceAmount,
+    );
+    const bridgeResult = await executePlanDataWithFallback(
+      bridgePlanData,
+      "Swapping to EUR bridge...",
+      "Retrying EUR bridge route...",
+    );
+    const bridgeAmount = ethers.formatUnits(
+      bridgeResult.receivedAmountRaw,
+      bridgeResult.tokenOut.decimals,
+    );
+    const finalPlanData = await fetchDynamicSwapPlan(
+      bridgeResult.tokenOut.symbol,
+      targetCurrency,
+      bridgeAmount,
+    );
+    return executePlanDataWithFallback(
+      finalPlanData,
+      "Swapping bridge funds to recipient currency...",
+      "Retrying recipient currency route...",
+    );
+  };
+
+  let swapResult;
+  if (shouldPreferEurBridge(sourceCurrency, targetCurrency)) {
+    try {
+      swapResult = await executeViaEurBridge();
+    } catch (error) {
+      if (!isMedianError(error)) {
+        throw error;
+      }
+
+      try {
+        swapResult = await executeSwapPlanAndMeasure(
+          swapPlan,
+          "Retrying with direct route...",
+        );
+      } catch (directError) {
+        if (executionPayload.fallbackSwapPlan && isMedianError(directError)) {
+          swapResult = await executeSwapPlanAndMeasure(
+            executionPayload.fallbackSwapPlan,
+            "Retrying with fallback route...",
+          );
+        } else {
+          throw directError;
+        }
+      }
+    }
+  } else {
+    try {
+      swapResult = await executeSwapPlanAndMeasure(swapPlan, "Executing swap...");
+    } catch (error) {
+      const canRetryWithFallback =
+        executionPayload.fallbackSwapPlan &&
+        isMedianError(error);
+
+      if (canRetryWithFallback) {
+        swapResult = await executeSwapPlanAndMeasure(
+          executionPayload.fallbackSwapPlan,
+          "Retrying with fallback route...",
+        );
+      } else if (isMedianError(error) && canUseEurBridgeFallback(sourceCurrency, targetCurrency)) {
+        swapResult = await executeViaEurBridge();
+      } else {
+        throw error;
+      }
+    }
   }
 
   const transferTx = await executeDirectTransfer({
-    currency: swapPlan.tokenOut.symbol,
-    amountRaw: receivedAmountRaw,
+    currency: swapResult.tokenOut.symbol,
+    amountRaw: swapResult.receivedAmountRaw,
     recipientAddress,
     stablecoinAddresses,
   });
@@ -326,8 +495,11 @@ async function executeBrowserSwapAndTransfer(executionPayload) {
     txHash: transferTx.tx.hash,
     blockNumber: transferTx.receipt.blockNumber,
     gasUsed: transferTx.receipt.gasUsed?.toString(),
-    receiveAmount: ethers.formatUnits(receivedAmountRaw, swapPlan.tokenOut.decimals),
-    receiveCurrency: targetCurrency || swapPlan.tokenOut.symbol,
+    receiveAmount: ethers.formatUnits(
+      swapResult.receivedAmountRaw,
+      swapResult.tokenOut.decimals,
+    ),
+    receiveCurrency: targetCurrency || swapResult.tokenOut.symbol,
   };
 }
 
@@ -718,7 +890,7 @@ async function performSessionAction() {
       }
     }
   } catch (error) {
-    const message = error?.reason || error?.shortMessage || error?.message || "Action failed.";
+    const message = formatExecutionError(error);
     setResult(message, "error");
     setStatus(message, "error");
   } finally {
