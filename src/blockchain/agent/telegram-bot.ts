@@ -153,7 +153,9 @@ export class TelegramBotHandler {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(userId);
 
-      await ctx.sendChatAction('typing');
+      await ctx.sendChatAction('typing').catch((error) => {
+        console.warn('[Telegram] Failed to send chat action:', error);
+      });
 
       // Process message through agent
       const response = await agent.processMessage(userMessage);
@@ -180,7 +182,9 @@ export class TelegramBotHandler {
         if (!actionData) return;
         const mappedAction = this.callbackActionMap[actionData] || actionData;
         await ctx.editMessageReplyMarkup(undefined).catch(() => {});
-        await ctx.sendChatAction('typing');
+        await ctx.sendChatAction('typing').catch((error) => {
+          console.warn('[Telegram] Failed to send chat action:', error);
+        });
 
         // Feed the button click back into the AI as if the user typed it
         const response = await agent.processMessage(mappedAction);
