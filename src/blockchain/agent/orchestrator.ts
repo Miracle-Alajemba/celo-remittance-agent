@@ -994,13 +994,24 @@ export class AgentOrchestrator {
       fundingPlan.executionSourceAmount || this.formatAmount(amount),
     );
 
-    const routes = isDirectAssetTransfer
-      ? [this.buildDirectAssetRoute(sourceCurrency, amount)]
-      : await findOptimalRoute(
-          previewRouteSourceCurrency,
-          targetCurrency,
-          previewRouteAmount,
-        );
+    let routes: TransferRoute[] = [];
+    try {
+      routes = isDirectAssetTransfer
+        ? [this.buildDirectAssetRoute(sourceCurrency, amount)]
+        : await findOptimalRoute(
+            previewRouteSourceCurrency,
+            targetCurrency,
+            previewRouteAmount,
+          );
+    } catch (error) {
+      console.error("[SendIntent] Route resolution failed:", error);
+      return this.createResponse(
+        "⚠️ I could not prepare a transfer route right now. Please try again in a moment.",
+        "error",
+        lang,
+        ["Check balance", "Send money"],
+      );
+    }
     const bestRoute = routes[0];
 
     if (!bestRoute) {
@@ -1011,13 +1022,18 @@ export class AgentOrchestrator {
       );
     }
 
-    const comparison = isDirectAssetTransfer
-      ? undefined
-      : await compareFees(
+    let comparison: FeeComparison | undefined;
+    if (!isDirectAssetTransfer) {
+      try {
+        comparison = await compareFees(
           amount,
           sourceCurrency,
           intent.recipientCountry || "PH",
         );
+      } catch (error) {
+        console.warn("[SendIntent] Fee comparison unavailable for preview:", error);
+      }
+    }
 
     // Build route info string
     let routeInfo = "";
