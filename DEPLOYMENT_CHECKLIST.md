@@ -194,8 +194,6 @@ pm2 restart celo-remittance-prod
 
 ## 🔗 Quick Links
 
-- MAINNET_SETUP.md - Detailed guide
-- CODEBASE_GUIDE.md - File descriptions and troubleshooting
 - README.md - Project overview
 - Celo Docs: https://docs.celo.org
 - Mento Docs: https://github.com/mento-protocol
