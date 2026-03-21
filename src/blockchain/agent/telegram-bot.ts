@@ -9,6 +9,8 @@ import { Telegraf, Context, Markup } from 'telegraf';
 import * as dotenv from 'dotenv';
 import https from 'https';
 import { AgentOrchestrator, AgentResponse } from './orchestrator';
+import { getUser } from './user-profile';
+import { getAllWalletBalances } from '../transaction-executor';
 import {
   completeWalletApprovalSession,
   createWalletApprovalSession,
@@ -113,12 +115,7 @@ export class TelegramBotHandler {
 
     // 3. /balance command
     this.bot.command('balance', withRecovery(async (ctx: Context) => {
-      const user = this.registerUser(ctx);
-      const agent = this.getOrCreateAgent(user.id);
-      agent.clearPendingTransferFlow();
-
-      const response = await agent.processMessage('Check my balance');
-      await this.sendResponse(ctx, response);
+      await this.sendHostedSafeBalanceResponse(ctx);
     }));
 
     // 4. /history command
@@ -156,6 +153,12 @@ export class TelegramBotHandler {
       await ctx.sendChatAction('typing').catch((error) => {
         console.warn('[Telegram] Failed to send chat action:', error);
       });
+
+      if (this.isBalanceShortcut(userMessage)) {
+        agent.clearPendingTransferFlow();
+        await this.sendHostedSafeBalanceResponse(ctx);
+        return;
+      }
 
       // Process message through agent
       const response = await agent.processMessage(userMessage);
@@ -340,6 +343,84 @@ export class TelegramBotHandler {
     }
 
     return normalized.replace(/[^a-z0-9]+/g, '_').slice(0, 60) || 'action';
+  }
+
+  private isBalanceShortcut(message: string): boolean {
+    const normalized = message.trim().toLowerCase();
+    return [
+      'balance',
+      'check balance',
+      'check my balance',
+      'show balance',
+      'show my balance',
+      'my balance',
+    ].includes(normalized);
+  }
+
+  private async sendHostedSafeBalanceResponse(ctx: Context): Promise<void> {
+    const telegramUserId = ctx.from?.id;
+    if (!telegramUserId) {
+      await ctx.reply('⚠️ Could not identify your Telegram account. Please try again.').catch(() => {});
+      return;
+    }
+
+    const user = this.registerUser(ctx);
+    const agent = this.getOrCreateAgent(user.id);
+    agent.clearPendingTransferFlow();
+
+    const profile = await getUser(`telegram_${telegramUserId}`);
+    const walletAddress = profile?.walletAddress?.trim();
+
+    if (!walletAddress) {
+      const session = createWalletAuthSession({
+        channel: 'telegram',
+        telegramUserId,
+        language: profile?.language || 'en',
+        reason: 'balance',
+      });
+
+      const authUrl = `${this.getPublicAppUrl()}/connect?authSession=${encodeURIComponent(session.id)}`;
+      await ctx.reply(
+        '🔐 To check your balance, first connect and sign with your wallet.',
+        {
+          reply_markup: {
+            inline_keyboard: [[Markup.button.url('🔐 Connect wallet', authUrl)]],
+          },
+        },
+      );
+      return;
+    }
+
+    const balances = await getAllWalletBalances(walletAddress);
+    const dailyUsed = Number(profile?.dailySpent || 0).toFixed(2);
+    const dailyLimit = Number(profile?.dailySpendingLimit || 500).toString();
+    const monthlyUsed = Number(profile?.monthlySpent || 0).toFixed(2);
+    const monthlyLimit = Number(profile?.monthlySpendingLimit || 5000).toString();
+
+    const text = [
+      '💰 Your Wallet Balance',
+      '',
+      `🔵 CELO: ${balances['CELO'] || '0'} CELO`,
+      `💵 cUSD (Celo Dollar): $${balances['cUSD'] || '0'}`,
+      `💶 cEUR (Celo Euro): €${balances['cEUR'] || '0'}`,
+      `🇧🇷 BRLm (Mento Real): R$${balances['BRLm'] || '0'}`,
+      '',
+      `📊 Spending Today: $${dailyUsed}/$${dailyLimit}`,
+      `📊 Spending This Month: $${monthlyUsed}/$${monthlyLimit}`,
+    ].join('\n');
+
+    await ctx.reply(text, {
+      reply_markup: {
+        inline_keyboard: this.chunkArray(
+          [
+            Markup.button.callback('Send money', 'send_money'),
+            Markup.button.callback('View history', 'view_history'),
+            Markup.button.callback('My wallet', 'my_wallet'),
+          ],
+          2,
+        ),
+      },
+    });
   }
 
   private getPublicAppUrl(): string {
