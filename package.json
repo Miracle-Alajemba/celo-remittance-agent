@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
-    "build": "tsc",
+    "build": "node node_modules/typescript/lib/tsc.js --pretty false",
     "start": "node dist/index.js",
     "test:send-celo": "ts-node scripts/test-send-celo.ts",
     "test:swap-send": "ts-node scripts/test-swap-send.ts",
