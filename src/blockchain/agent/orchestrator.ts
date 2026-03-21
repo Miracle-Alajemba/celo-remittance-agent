@@ -1612,25 +1612,34 @@ export class AgentOrchestrator {
   // 👈 REAL BLOCKCHAIN LOGIC ADDED HERE
   private async handleBalanceCheck(lang: string): Promise<AgentResponse> {
     const responses = RESPONSES[lang] || RESPONSES["en"];
-    const profile = this.memory.getUserProfile();
-    const user = await getUser(this.userId);
-    if (user?.walletAddress) {
-      this.walletAddress = user.walletAddress;
-      this.memory.setUserProfile({ walletAddress: user.walletAddress });
-    }
-    const memoryWallet = this.memory.getUserProfile().walletAddress;
-    const walletAddress =
-      this.getUserWalletAddress(memoryWallet) ||
-      this.getUserWalletAddress(user?.walletAddress) ||
-      this.getUserWalletAddress(this.walletAddress);
-
-    if (!walletAddress) {
-      this.pendingWalletRequest = true;
-      this.pendingWalletRequestSource = "balance";
-      return this.createWalletAuthPrompt(lang, "balance");
-    }
-
     try {
+      const profile = this.memory.getUserProfile();
+      const spendingLimit = profile.spendingLimit || {
+        daily: 500,
+        monthly: 5000,
+        dailyUsed: 0,
+        monthlyUsed: 0,
+        lastResetDaily: new Date(),
+        lastResetMonthly: new Date(),
+      };
+
+      const user = await getUser(this.userId);
+      if (user?.walletAddress) {
+        this.walletAddress = user.walletAddress;
+        this.memory.setUserProfile({ walletAddress: user.walletAddress });
+      }
+      const memoryWallet = this.memory.getUserProfile().walletAddress;
+      const walletAddress =
+        this.getUserWalletAddress(memoryWallet) ||
+        this.getUserWalletAddress(user?.walletAddress) ||
+        this.getUserWalletAddress(this.walletAddress);
+
+      if (!walletAddress) {
+        this.pendingWalletRequest = true;
+        this.pendingWalletRequestSource = "balance";
+        return this.createWalletAuthPrompt(lang, "balance");
+      }
+
       // Fetch REAL balances from the Celo blockchain
       const realBalances = await getAllWalletBalances(walletAddress);
 
@@ -1643,10 +1652,10 @@ export class AgentOrchestrator {
 
       const msg = responses["balance_info"]
         .replace("{balances}", balances)
-        .replace("{dailyUsed}", profile.spendingLimit.dailyUsed.toFixed(2))
-        .replace("{dailyLimit}", profile.spendingLimit.daily.toString())
-        .replace("{monthlyUsed}", profile.spendingLimit.monthlyUsed.toFixed(2))
-        .replace("{monthlyLimit}", profile.spendingLimit.monthly.toString());
+        .replace("{dailyUsed}", Number(spendingLimit.dailyUsed || 0).toFixed(2))
+        .replace("{dailyLimit}", Number(spendingLimit.daily || 500).toString())
+        .replace("{monthlyUsed}", Number(spendingLimit.monthlyUsed || 0).toFixed(2))
+        .replace("{monthlyLimit}", Number(spendingLimit.monthly || 5000).toString());
 
       const response = this.createResponse(msg, "text", lang, [
         "Send money",
