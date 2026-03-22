@@ -135,12 +135,13 @@ Common variables used by this project include:
 - `TWILIO_PHONE_NUMBER`
 - `TWILIO_WHATSAPP_NUMBER`
 - `ANTHROPIC_API_KEY`
-- `PRIVATE_KEY`
+- `PRIVATE_KEY` (optional, only for backend-signed or local fallback flows)
 - `REOWN_PROJECT_ID`
 
 Notes:
 
 - wallet sign-in uses `PUBLIC_APP_URL` for Telegram and WhatsApp handoff links
+- the primary demo path is non-custodial and user-approved through wallet sign-in; `PRIVATE_KEY` is not required for that main flow
 - MongoDB is recommended for persistent schedules and transaction history
 - some development and fallback flows can still run without every optional integration configured
 
