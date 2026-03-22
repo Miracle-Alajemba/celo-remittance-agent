@@ -1,6 +1,6 @@
 # CeloRemit
 
-CeloRemit is an AI remittance agent built on Celo. It lets users describe cross-border transfers in natural language through chat interfaces like Telegram and WhatsApp, then routes value through Celo stable assets and Mento swap paths, asks the user to sign with their own wallet, and completes the transfer on-chain.
+CeloRemit is an AI remittance agent on Celo that lets users request cross-border transfers in natural language through Telegram and WhatsApp. The agent parses intent, prepares transfer previews, compares fees against traditional providers, routes value through Celo stable assets and Mento swap paths, and uses non-custodial wallet sign-in and user-approved execution for security. It also supports recurring transfers, receipts, transaction history, and spending limits.
 
 Example prompts:
 
@@ -109,6 +109,10 @@ Strongest live demo path:
 - `Cancel schedule`
 
 WhatsApp support is integrated and wallet sign-in works. Some live wallet-signed swap corridors may still depend on current on-chain pricing availability, so Telegram is the strongest primary demo path.
+
+## Known Limitations
+
+Some live Mento-powered swap corridors may be temporarily unavailable when on-chain pricing or median data is unavailable. The agent detects this and responds gracefully instead of submitting a failing transfer. Core wallet sign-in, chat orchestration, transfer previews, fee comparison, and previously validated live corridors remain integrated into the product.
 
 ## Setup
 
