@@ -87,7 +87,7 @@ export class TelegramBotHandler {
         await handler(ctx);
       } catch (error: any) {
         console.error('[Telegram Handler Error]', error);
-        await ctx.reply(`⚠️ Something went wrong. Please try again.`).catch(() => {});
+        await ctx.reply(this.getUserFacingTelegramError(error)).catch(() => {});
       }
     };
 
@@ -199,7 +199,7 @@ export class TelegramBotHandler {
     this.bot.catch((err: any, ctx: Context) => {
       console.error('[Telegram Bot Error]', err);
       // Only reply if we haven't already replied
-      ctx.reply(`⚠️ Something went wrong. Please try again.`).catch(() => {});
+      ctx.reply(this.getUserFacingTelegramError(err)).catch(() => {});
     });
   }
 
@@ -354,6 +354,40 @@ export class TelegramBotHandler {
       'show my balance',
       'my balance',
     ].includes(normalized);
+  }
+
+  private getUserFacingTelegramError(error: unknown): string {
+    const raw =
+      error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : typeof error === 'string'
+          ? error
+          : JSON.stringify(error);
+    const message = raw.toLowerCase();
+
+    if (
+      /timeout|timed out|socket hang up|network error|eai_again|failed to fetch/i.test(message)
+    ) {
+      return '⚠️ The network took too long to respond. Please try again in a moment.';
+    }
+
+    if (/no valid median|unsupported currency pair|could not prepare a transfer route/i.test(message)) {
+      return '⚠️ This route is temporarily unavailable right now. Please try another corridor or try again shortly.';
+    }
+
+    if (/insufficient balance|not enough balance|insufficient funds/i.test(message)) {
+      return '⚠️ Your linked wallet does not have enough supported balance for this transfer.';
+    }
+
+    if (/wallet sign-in session|wallet approval session|session expired|connect and sign/i.test(message)) {
+      return '⚠️ Your wallet session expired. Please connect and sign again.';
+    }
+
+    if (/markdown|reply markup|button_data_invalid|message is not modified/i.test(message)) {
+      return '⚠️ The message could not be formatted properly. Please try the command once more.';
+    }
+
+    return '⚠️ Something went wrong. Please try again.';
   }
 
   private async sendHostedSafeBalanceResponse(ctx: Context): Promise<void> {
