@@ -454,21 +454,91 @@ export class TelegramBotHandler {
     });
 
     const authUrl = `${this.getPublicAppUrl()}/connect?authSession=${encodeURIComponent(session.id)}`;
-    await ctx.reply(
-      '🔐 To check your balance, connect and sign with your wallet first. After signing, I’ll bring the verified balance back here in Telegram.',
-      {
-      reply_markup: {
-        inline_keyboard: [[Markup.button.url('🔐 Connect wallet', authUrl)]],
-      },
+    const message =
+      '🔐 To check your balance, connect and sign with your wallet first. After signing, I’ll bring the verified balance back here in Telegram.';
+
+    try {
+      await ctx.reply(message, {
+        reply_markup: {
+          inline_keyboard: [[Markup.button.url('🔐 Connect wallet', authUrl)]],
+        },
+      });
+    } catch (error) {
+      console.warn('[Telegram] Failed to send balance auth button, falling back to plain link:', error);
+      await ctx.reply(`${message}\n\nOpen this link:\n${authUrl}`);
+    }
+  }
+
+  private buildWalletAuthUrl(userId: number, language: string, reason: 'onboarding' | 'balance' | 'wallet'): string {
+    const session = createWalletAuthSession({
+      channel: 'telegram',
+      telegramUserId: userId,
+      language,
+      reason,
     });
+
+    return `${this.getPublicAppUrl()}/connect?authSession=${encodeURIComponent(session.id)}`;
+  }
+
+  private async sendWalletAuthReply(
+    ctx: Context,
+    userId: number,
+    language: string,
+    reason: 'onboarding' | 'balance' | 'wallet',
+    message: string,
+  ): Promise<void> {
+    const authUrl = this.buildWalletAuthUrl(userId, language, reason);
+    try {
+      await ctx.reply(message, {
+        reply_markup: {
+          inline_keyboard: [[Markup.button.url('🔐 Connect wallet', authUrl)]],
+        },
+      });
+    } catch (error) {
+      console.warn('[Telegram] Failed to send wallet auth button, falling back to plain link:', error);
+      await ctx.reply(`${message}\n\nOpen this link:\n${authUrl}`);
+    }
   }
 
   private getPublicAppUrl(): string {
-    return (
-      process.env.PUBLIC_APP_URL ||
-      process.env.APP_URL ||
-      `http://localhost:${process.env.PORT || 3001}`
+    const normalize = (value?: string | null): string | null => {
+      if (!value) return null;
+      const trimmed = value.trim().replace(/\/+$/, '');
+      if (!trimmed) return null;
+      try {
+        const parsed = new URL(trimmed);
+        const host = parsed.hostname.toLowerCase();
+        if (!/^https?:$/.test(parsed.protocol)) return null;
+        if (host === 'localhost' || host === '127.0.0.1') return null;
+        return trimmed;
+      } catch {
+        return null;
+      }
+    };
+
+    const direct =
+      normalize(process.env.PUBLIC_APP_URL) ||
+      normalize(process.env.APP_URL);
+    if (direct) return direct;
+
+    const railwayDomain =
+      process.env.RAILWAY_PUBLIC_DOMAIN ||
+      process.env.RAILWAY_STATIC_URL;
+    if (railwayDomain) {
+      const normalizedRailway = normalize(
+        railwayDomain.startsWith('http')
+          ? railwayDomain
+          : `https://${railwayDomain}`,
+      );
+      if (normalizedRailway) return normalizedRailway;
+    }
+
+    const emergencyHostedFallback = normalize(
+      'https://celo-remittance-agent-production.up.railway.app',
     );
+    if (emergencyHostedFallback) return emergencyHostedFallback;
+
+    return `http://localhost:${process.env.PORT || 3001}`;
   }
 
   private createWalletApprovalUrl(userId: number): string | null {
@@ -492,14 +562,7 @@ export class TelegramBotHandler {
     const authContext = agent.getPendingWalletAuthContext();
     if (!authContext) return null;
 
-    const session = createWalletAuthSession({
-      channel: 'telegram',
-      telegramUserId: userId,
-      language: authContext.language,
-      reason: authContext.reason,
-    });
-
-    return `${this.getPublicAppUrl()}/connect?authSession=${encodeURIComponent(session.id)}`;
+    return this.buildWalletAuthUrl(userId, authContext.language, authContext.reason);
   }
 
   private async sendDirectResponse(
