@@ -10,7 +10,6 @@ import * as dotenv from 'dotenv';
 import https from 'https';
 import { AgentOrchestrator, AgentResponse } from './orchestrator';
 import { getUser } from './user-profile';
-import { getAllWalletBalances } from '../transaction-executor';
 import {
   completeWalletApprovalSession,
   createWalletApprovalSession,
@@ -369,56 +368,19 @@ export class TelegramBotHandler {
     agent.clearPendingTransferFlow();
 
     const profile = await getUser(`telegram_${telegramUserId}`);
-    const walletAddress = profile?.walletAddress?.trim();
+    const session = createWalletAuthSession({
+      channel: 'telegram',
+      telegramUserId,
+      language: profile?.language || 'en',
+      reason: 'balance',
+    });
 
-    if (!walletAddress) {
-      const session = createWalletAuthSession({
-        channel: 'telegram',
-        telegramUserId,
-        language: profile?.language || 'en',
-        reason: 'balance',
-      });
-
-      const authUrl = `${this.getPublicAppUrl()}/connect?authSession=${encodeURIComponent(session.id)}`;
-      await ctx.reply(
-        '🔐 To check your balance, first connect and sign with your wallet.',
-        {
-          reply_markup: {
-            inline_keyboard: [[Markup.button.url('🔐 Connect wallet', authUrl)]],
-          },
-        },
-      );
-      return;
-    }
-
-    const balances = await getAllWalletBalances(walletAddress);
-    const dailyUsed = Number(profile?.dailySpent || 0).toFixed(2);
-    const dailyLimit = Number(profile?.dailySpendingLimit || 500).toString();
-    const monthlyUsed = Number(profile?.monthlySpent || 0).toFixed(2);
-    const monthlyLimit = Number(profile?.monthlySpendingLimit || 5000).toString();
-
-    const text = [
-      '💰 Your Wallet Balance',
-      '',
-      `🔵 CELO: ${balances['CELO'] || '0'} CELO`,
-      `💵 cUSD (Celo Dollar): $${balances['cUSD'] || '0'}`,
-      `💶 cEUR (Celo Euro): €${balances['cEUR'] || '0'}`,
-      `🇧🇷 BRLm (Mento Real): R$${balances['BRLm'] || '0'}`,
-      '',
-      `📊 Spending Today: $${dailyUsed}/$${dailyLimit}`,
-      `📊 Spending This Month: $${monthlyUsed}/$${monthlyLimit}`,
-    ].join('\n');
-
-    await ctx.reply(text, {
+    const authUrl = `${this.getPublicAppUrl()}/connect?authSession=${encodeURIComponent(session.id)}`;
+    await ctx.reply(
+      '🔐 To check your balance, connect and sign with your wallet first. After signing, I’ll bring the verified balance back here in Telegram.',
+      {
       reply_markup: {
-        inline_keyboard: this.chunkArray(
-          [
-            Markup.button.callback('Send money', 'send_money'),
-            Markup.button.callback('View history', 'view_history'),
-            Markup.button.callback('My wallet', 'my_wallet'),
-          ],
-          2,
-        ),
+        inline_keyboard: [[Markup.button.url('🔐 Connect wallet', authUrl)]],
       },
     });
   }
