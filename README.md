@@ -1,6 +1,6 @@
 # CeloRemit
 
-CeloRemit is an AI remittance agent built on Celo. It lets users describe cross-border transfers in natural language through chat interfaces like Telegram and WhatsApp, then routes value through Celo stable assets and Mento, asks the user to sign with their wallet, and completes the transfer on-chain.
+CeloRemit is an AI remittance agent built on Celo. It lets users describe cross-border transfers in natural language through chat interfaces like Telegram and WhatsApp, then routes value through Celo stable assets and Mento swap paths, asks the user to sign with their own wallet, and completes the transfer on-chain.
 
 Example prompts:
 
@@ -14,7 +14,7 @@ Example prompts:
 - Parses remittance intents from natural language
 - Supports English, Spanish, Portuguese, and French
 - Shows transfer previews with rate, receive estimate, fee, and frequency
-- Routes across Celo stable assets and Mento swap paths
+- Routes across Celo stable assets and Mento swap paths when live pool pricing is available
 - Supports recurring transfers, schedule listing, and cancellation
 - Tracks receipts, history, and spending limits
 - Uses wallet sign-in and wallet approval for user-controlled execution
@@ -58,14 +58,12 @@ The user-signed Telegram flow has also been validated end to end, including wall
 
 ## Core Features
 
-- Natural language remittance intent parsing
-- Multi-language support
-- Multi-corridor remittance support
-- Fee comparison against traditional remittance providers
-- Recurring transfer scheduling
-- Transaction history and receipts
-- Spending limits
-- Wallet sign-in and wallet-approved execution
+- Natural language remittance intent parsing with multilingual support for English, Spanish, Portuguese, and French
+- Multi-corridor transfer routing powered by Celo stable assets and Mento swap paths, with support for corridors such as USD -> PHP, EUR -> NGN, and GBP -> KES when live pool pricing is available
+- Fee comparison versus traditional providers such as Western Union and Wise, highlighting estimated user savings
+- Recurring transfer scheduling with recipient notifications over SMS and WhatsApp
+- Transaction history, receipts, and spending limits for safer remittance activity
+- Non-custodial wallet sign-in and user-approved transfers through Telegram and WhatsApp linked web flows
 
 ## Integrations
 
