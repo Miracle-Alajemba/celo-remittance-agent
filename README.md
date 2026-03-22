@@ -99,6 +99,8 @@ The user-signed Telegram flow has also been validated end to end, including wall
 
 Strongest live demo path:
 
+- Telegram bot: `@CeloRemitBot`
+- Hosted app: `https://celo-remittance-agent-production.up.railway.app`
 - Telegram sign-in
 - balance check
 - transfer preview
@@ -106,9 +108,18 @@ Strongest live demo path:
 - on-chain receipt
 - recurring transfer creation
 - `Show schedules`
+
 - `Cancel schedule`
 
 WhatsApp support is integrated and wallet sign-in works. Some live wallet-signed swap corridors may still depend on current on-chain pricing availability, so Telegram is the strongest primary demo path.
+
+## How Judges Can Test
+
+1. Open Telegram and search for `@CeloRemitBot`
+2. Send `/start`
+3. Send `check balance`
+4. Click the wallet connect button and sign in
+5. Return to Telegram for the verified balance and continue with prompts like `Compare fees for sending $200 to Kenya` or `Show history`
 
 ## Known Limitations
 
