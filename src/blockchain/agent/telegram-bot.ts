@@ -400,12 +400,18 @@ export class TelegramBotHandler {
     const user = this.registerUser(ctx);
     const agent = this.getOrCreateAgent(user.id);
     agent.clearPendingTransferFlow();
+    let profileLanguage = 'en';
+    try {
+      const profile = await getUser(`telegram_${telegramUserId}`);
+      profileLanguage = profile?.language || 'en';
+    } catch (error) {
+      console.warn('[Telegram] Failed to load profile for balance auth flow:', error);
+    }
 
-    const profile = await getUser(`telegram_${telegramUserId}`);
     const session = createWalletAuthSession({
       channel: 'telegram',
       telegramUserId,
-      language: profile?.language || 'en',
+      language: profileLanguage,
       reason: 'balance',
     });
 
