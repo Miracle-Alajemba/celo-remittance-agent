@@ -76,6 +76,15 @@ The user-signed Telegram flow has also been validated end to end, including wall
 - Reown / WalletConnect
 - Anthropic SDK
 
+## Services Used
+
+- Railway for hosted deployment
+- MongoDB Atlas for persistent users, schedules, and transaction records
+- Twilio for WhatsApp and SMS delivery
+- Reown / WalletConnect for wallet connection and signing UX
+- Anthropic SDK for language understanding enhancements
+- Wise comparison API plus FX fallback logic for provider-fee comparison
+
 ## Tech Stack
 
 - TypeScript
