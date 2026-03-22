@@ -96,10 +96,7 @@ export class TelegramBotHandler {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
       agent.clearMemory();
-
-      // Trigger the greeting flow in the Orchestrator
-      const response = await agent.processMessage('hello');
-      await this.sendResponse(ctx, response);
+      await this.sendStableHelpMessage(ctx);
     }));
 
     // 2. /help command
@@ -107,9 +104,7 @@ export class TelegramBotHandler {
       const user = this.registerUser(ctx);
       const agent = this.getOrCreateAgent(user.id);
       agent.clearPendingTransferFlow();
-
-      const response = await agent.processMessage('help');
-      await this.sendResponse(ctx, response);
+      await this.sendStableHelpMessage(ctx);
     }));
 
     // 3. /balance command
@@ -152,6 +147,12 @@ export class TelegramBotHandler {
       await ctx.sendChatAction('typing').catch((error) => {
         console.warn('[Telegram] Failed to send chat action:', error);
       });
+
+      if (this.isHelpShortcut(userMessage)) {
+        agent.clearPendingTransferFlow();
+        await this.sendStableHelpMessage(ctx);
+        return;
+      }
 
       if (this.isBalanceShortcut(userMessage)) {
         agent.clearPendingTransferFlow();
@@ -354,6 +355,43 @@ export class TelegramBotHandler {
       'show my balance',
       'my balance',
     ].includes(normalized);
+  }
+
+  private isHelpShortcut(message: string): boolean {
+    const normalized = message.trim().toLowerCase();
+    return ['start', 'help', 'menu'].includes(normalized);
+  }
+
+  private async sendStableHelpMessage(ctx: Context): Promise<void> {
+    const text = [
+      '🤖 Celo Remittance Agent - Help',
+      '',
+      'What I can do:',
+      '🔸 Send money globally using Celo stablecoins',
+      '🔸 Compare fees vs Western Union, Wise & more',
+      '🔸 Schedule recurring transfers',
+      '🔸 Track transaction history & receipts',
+      '🔸 Find the cheapest transfer routes',
+      '🔸 Preview token swaps via Mento',
+      '',
+      'Commands:',
+      '• "Send $100 to Philippines" - One-time transfer',
+      '• "Send €200 to Nigeria monthly" - Recurring transfer',
+      '• "Compare fees $500 to Kenya" - Fee comparison',
+      '• "Swap 10 cUSD to cEUR" - Swap preview',
+      '• "Check balance" - View balances',
+      '• "Show history" - Transaction history',
+      '• "Cancel schedule" - Cancel recurring',
+      '',
+      'Supported corridors:',
+      '🇵🇭 Philippines | 🇳🇬 Nigeria | 🇰🇪 Kenya',
+      '🇧🇷 Brazil | 🇨🇴 Colombia | 🇸🇳 Senegal',
+      '🇲🇽 Mexico | 🇬🇭 Ghana | 🇮🇳 India',
+      '',
+      'Languages: English, Español, Português, Français',
+    ].join('\n');
+
+    await ctx.reply(text);
   }
 
   private getUserFacingTelegramError(error: unknown): string {
