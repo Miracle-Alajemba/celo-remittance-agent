@@ -994,6 +994,40 @@ export class AgentOrchestrator {
       fundingPlan.executionSourceAmount || this.formatAmount(amount),
     );
 
+    if (!isDirectAssetTransfer) {
+      try {
+        const executableQuote = await getSwapQuote(
+          previewRouteSourceCurrency,
+          targetCurrency,
+          fundingPlan.executionSourceAmount || this.formatAmount(amount),
+        );
+        if (/fx fallback/i.test(executableQuote.route || "")) {
+          const routeUnavailableMsg =
+            lang === "es"
+              ? "⚠️ Esta ruta de swap no está disponible en este momento porque el precio on-chain en vivo no está disponible. Intenta con otro corredor o vuelve a intentarlo más tarde."
+              : lang === "pt"
+                ? "⚠️ Esta rota de swap não está disponível agora porque o preço on-chain ao vivo não está disponível. Tente outro corredor ou tente novamente mais tarde."
+                : lang === "fr"
+                  ? "⚠️ Cette route de swap est temporairement indisponible car le prix on-chain en direct n’est pas disponible. Essayez un autre corridor ou réessayez plus tard."
+                  : "⚠️ This swap route is temporarily unavailable right now because live on-chain pricing is unavailable. Try another corridor or retry later.";
+          return this.createResponse(
+            routeUnavailableMsg,
+            "error",
+            lang,
+            ["Compare fees", "Send money", "Check balance"],
+          );
+        }
+      } catch (error) {
+        console.warn("[SendIntent] Swap route preflight failed:", error);
+        return this.createResponse(
+          "⚠️ I could not verify a live on-chain route for this transfer right now. Try another corridor or retry later.",
+          "error",
+          lang,
+          ["Compare fees", "Send money", "Check balance"],
+        );
+      }
+    }
+
     let routes: TransferRoute[] = [];
     try {
       routes = isDirectAssetTransfer
