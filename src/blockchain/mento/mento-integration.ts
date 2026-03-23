@@ -65,8 +65,34 @@ export interface BrowserSwapExecutionPlan {
   }>;
 }
 
+type ResolvedLiveMentoQuote = {
+  quote: SwapQuote;
+  tokenIn: TokenInfo;
+  tokenOut: TokenInfo;
+  tradablePair: any;
+  decimalsIn: number;
+  decimalsOut: number;
+  amountIn: ReturnType<typeof utils.parseUnits>;
+};
+
 function getPairHopCount(tradablePair: any | null | undefined): number {
   return tradablePair?.path?.length || 0;
+}
+
+function sameTradablePair(a: any | null | undefined, b: any | null | undefined): boolean {
+  if (!a || !b) return false;
+  const aPath = Array.isArray(a.path) ? a.path : [];
+  const bPath = Array.isArray(b.path) ? b.path : [];
+  if (aPath.length !== bPath.length) return false;
+  return aPath.every((step: any, index: number) => {
+    const other = bPath[index];
+    return (
+      String(step?.providerAddr || "").toLowerCase() ===
+        String(other?.providerAddr || "").toLowerCase() &&
+      String(step?.id || "").toLowerCase() ===
+        String(other?.id || "").toLowerCase()
+    );
+  });
 }
 
 function pairMatchesAssets(
@@ -337,54 +363,162 @@ function buildFallbackQuote(params: {
   };
 }
 
+async function getCandidateTradablePairs(
+  mento: any,
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
+): Promise<any[]> {
+  const tradablePairs = await mento.getTradablePairsWithPath({
+    cached: true,
+    returnAllRoutes: true,
+  });
+
+  return tradablePairs
+    .filter((pair: any) => pairMatchesAssets(pair, tokenIn.address, tokenOut.address))
+    .sort((a: any, b: any) => getPairHopCount(a) - getPairHopCount(b));
+}
+
+function buildLiveQuote(params: {
+  inputAmount: string;
+  amount: number;
+  tokenIn: TokenInfo;
+  tokenOut: TokenInfo;
+  outputAmount: string;
+  tradablePair: any;
+}): SwapQuote {
+  const { inputAmount, amount, tokenIn, tokenOut, outputAmount, tradablePair } = params;
+  const outputNumeric = Number(outputAmount);
+  const rate = outputNumeric / amount;
+  const { fee, feePercent, fxRate } = computeFeeFromFx(
+    amount,
+    outputNumeric,
+    tokenIn.symbol,
+    tokenOut.symbol,
+  );
+
+  const routed = getPairHopCount(tradablePair) > 1;
+
+  return {
+    inputAmount,
+    outputAmount,
+    inputCurrency: tokenIn.symbol,
+    outputCurrency: tokenOut.symbol,
+    rate: fxRate || rate,
+    slippage: DEFAULT_SLIPPAGE,
+    fee,
+    feePercent,
+    estimatedGas: "0.001",
+    route: routed
+      ? `${tokenIn.symbol} → ${tokenOut.symbol} (Mento routed)`
+      : `${tokenIn.symbol} → ${tokenOut.symbol} (Mento)`,
+  };
+}
+
+async function resolveLiveMentoQuote(
+  inputCurrency: string,
+  outputCurrency: string,
+  inputAmount: string,
+  mentoOverride?: any,
+): Promise<ResolvedLiveMentoQuote> {
+  const amount = Number(inputAmount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error(`Invalid input amount: ${inputAmount}`);
+  }
+
+  const { tokenIn, tokenOut } = await resolvePair(inputCurrency, outputCurrency);
+  const mento = mentoOverride || (await getReadOnlyMento());
+  const decimalsIn = await getTokenDecimals(tokenIn.address);
+  const decimalsOut = await getTokenDecimals(tokenOut.address);
+  const amountIn = utils.parseUnits(inputAmount, decimalsIn);
+  const candidatePairs = await getCandidateTradablePairs(mento, tokenIn, tokenOut);
+
+  let bestQuote:
+    | {
+        amountOut: any;
+        tradablePair: any | null;
+      }
+    | null = null;
+  let lastError: any = null;
+
+  for (const tradablePair of candidatePairs) {
+    try {
+      const amountOut = await mento.getAmountOut(
+        tokenIn.address,
+        tokenOut.address,
+        amountIn.toHexString(),
+        tradablePair,
+      );
+
+      if (
+        !bestQuote ||
+        BigInt(amountOut.toString()) > BigInt(bestQuote.amountOut.toString())
+      ) {
+        bestQuote = { amountOut, tradablePair };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!bestQuote) {
+    try {
+      const amountOut = await mento.getAmountOut(
+        tokenIn.address,
+        tokenOut.address,
+        amountIn.toHexString(),
+      );
+      const tradablePair = await mento.findPairForTokens(
+        tokenIn.address,
+        tokenOut.address,
+      );
+      bestQuote = { amountOut, tradablePair };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!bestQuote || !bestQuote.tradablePair) {
+    throw lastError || new Error("No live Mento route could be quoted.");
+  }
+
+  const outputAmount = utils.formatUnits(bestQuote.amountOut, decimalsOut);
+
+  return {
+    quote: buildLiveQuote({
+      inputAmount,
+      amount,
+      tokenIn,
+      tokenOut,
+      outputAmount,
+      tradablePair: bestQuote.tradablePair,
+    }),
+    tokenIn,
+    tokenOut,
+    tradablePair: bestQuote.tradablePair,
+    decimalsIn,
+    decimalsOut,
+    amountIn,
+  };
+}
+
 export async function getSwapQuote(
   inputCurrency: string,
   outputCurrency: string,
   inputAmount: string,
 ): Promise<SwapQuote> {
   const amount = Number(inputAmount);
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error(`Invalid input amount: ${inputAmount}`);
-  }
-
   const { tokenIn, tokenOut } = await resolvePair(
     inputCurrency,
     outputCurrency,
   );
 
   try {
-    const mento = await getReadOnlyMento();
-    const decimalsIn = await getTokenDecimals(tokenIn.address);
-    const decimalsOut = await getTokenDecimals(tokenOut.address);
-    const amountIn = utils.parseUnits(inputAmount, decimalsIn);
-    const amountOut = await mento.getAmountOut(
-      tokenIn.address,
-      tokenOut.address,
-      amountIn.toHexString(),
-    );
-    const outputAmount = utils.formatUnits(amountOut, decimalsOut);
-
-    const outputNumeric = Number(outputAmount);
-    const rate = outputNumeric / amount;
-    const { fee, feePercent, fxRate } = computeFeeFromFx(
-      amount,
-      outputNumeric,
-      tokenIn.symbol,
-      tokenOut.symbol,
-    );
-
-    return {
+    const { quote } = await resolveLiveMentoQuote(
+      inputCurrency,
+      outputCurrency,
       inputAmount,
-      outputAmount,
-      inputCurrency: tokenIn.symbol,
-      outputCurrency: tokenOut.symbol,
-      rate: fxRate || rate,
-      slippage: DEFAULT_SLIPPAGE,
-      fee,
-      feePercent,
-      estimatedGas: "0.001",
-      route: `${tokenIn.symbol} → ${tokenOut.symbol} (Mento)`,
-    };
+    );
+    return quote;
   } catch (error) {
     console.warn("Swap quote error, using FX fallback:", error);
     return buildFallbackQuote({
@@ -405,34 +539,20 @@ export async function executeSwap(
   maxSlippage: number = 0.01,
 ): Promise<SwapResult> {
   try {
-    const quote = await getSwapQuote(
+    const { mento, signer } = await getSignerMento();
+    const {
+      quote,
+      tokenIn,
+      tokenOut,
+      tradablePair,
+      decimalsOut,
+      amountIn,
+    } = await resolveLiveMentoQuote(
       inputCurrency,
       outputCurrency,
       inputAmount,
+      mento,
     );
-    const { tokenIn, tokenOut } = await resolvePair(
-      inputCurrency,
-      outputCurrency,
-    );
-    const { mento, signer } = await getSignerMento();
-    const tradablePairs = await mento.getTradablePairsWithPath({
-      cached: true,
-      returnAllRoutes: false,
-    });
-    const tradablePair =
-      tradablePairs.find((pair: any) => {
-        const addresses = pair.assets.map((asset: any) =>
-          asset.address.toLowerCase(),
-        );
-        return (
-          addresses.includes(tokenIn.address.toLowerCase()) &&
-          addresses.includes(tokenOut.address.toLowerCase())
-        );
-      }) || null;
-
-    const decimalsIn = await getTokenDecimals(tokenIn.address);
-    const decimalsOut = await getTokenDecimals(tokenOut.address);
-    const amountIn = utils.parseUnits(inputAmount, decimalsIn);
 
     const expectedOut = utils.parseUnits(quote.outputAmount, decimalsOut);
     const slippageBps = clampBps(maxSlippage * 10000);
@@ -568,31 +688,26 @@ export async function buildBrowserSwapExecutionPlan(
   swapPlan: BrowserSwapExecutionPlan;
   fallbackSwapPlan?: BrowserSwapExecutionPlan;
 }> {
-  const quote = await getSwapQuote(inputCurrency, outputCurrency, inputAmount);
-  const { tokenIn, tokenOut } = await resolvePair(inputCurrency, outputCurrency);
   const mento = await getReadOnlyMento();
-  const tradablePairs = await mento.getTradablePairsWithPath({
-    cached: true,
-    returnAllRoutes: true,
-  });
-  const matchingPairs = tradablePairs.filter((pair: any) =>
-    pairMatchesAssets(pair, tokenIn.address, tokenOut.address),
+  const {
+    quote,
+    tokenIn,
+    tokenOut,
+    tradablePair: primaryPair,
+    decimalsIn,
+    decimalsOut,
+    amountIn,
+  } = await resolveLiveMentoQuote(
+    inputCurrency,
+    outputCurrency,
+    inputAmount,
+    mento,
   );
-  const directPair =
-    matchingPairs.find((pair: any) => getPairHopCount(pair) <= 1) || null;
-  const routedPairs = matchingPairs
-    .filter((pair: any) => getPairHopCount(pair) > 1)
-    .sort((a: any, b: any) => getPairHopCount(a) - getPairHopCount(b));
-  const quoteIsFallback = /fx fallback/i.test(quote.route || "");
-  const primaryPair = quoteIsFallback
-    ? routedPairs[0] || directPair
-    : directPair || routedPairs[0] || null;
+  const matchingPairs = await getCandidateTradablePairs(mento, tokenIn, tokenOut);
   const fallbackPair =
-    primaryPair === directPair ? routedPairs[0] || null : directPair;
+    matchingPairs.find((pair: any) => !sameTradablePair(pair, primaryPair)) ||
+    null;
 
-  const decimalsIn = await getTokenDecimals(tokenIn.address);
-  const decimalsOut = await getTokenDecimals(tokenOut.address);
-  const amountIn = utils.parseUnits(inputAmount, decimalsIn);
   const slippageBps = clampBps(maxSlippage * 10000);
   const swapPlan = buildPlanFromTradablePair({
     tokenIn,
