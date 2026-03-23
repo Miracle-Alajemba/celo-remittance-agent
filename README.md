@@ -99,7 +99,7 @@ The user-signed Telegram flow has also been validated end to end, including wall
 
 Strongest live demo path:
 
-- Telegram bot: `@CeloRemitBot`
+- Telegram bot: `@CeleRemit_bot`
 - Hosted app: `https://celo-remittance-agent-production.up.railway.app`
 - Telegram sign-in
 - balance check
@@ -115,7 +115,7 @@ WhatsApp support is integrated and wallet sign-in works. Some live wallet-signed
 
 ## How Judges Can Test
 
-1. Open Telegram and search for `@CeloRemitBot`
+1. Open Telegram and search for `@CeleRemit_bot`
 2. Send `/start`
 3. Send `check balance`
 4. Click the wallet connect button and sign in
